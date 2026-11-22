@@ -49,6 +49,17 @@ void setStatusLED(uint8_t color);
 void printLeds();
 #endif
 
+//True if the selected switcher is a RODECaster Video
+bool isRcv();
+
+#ifndef TALLY_TEST_SERVER
+//True if connected to the selected switcher
+bool switcherConnected();
+
+//Print RODECaster Video program/preview state to serial
+void printRcvState();
+#endif
+
 int getTallyState(uint16_t tallyNo);
 
 int getLedColor(int tallyMode, int tallyNo);

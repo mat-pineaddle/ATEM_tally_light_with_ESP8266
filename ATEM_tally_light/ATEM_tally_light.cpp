@@ -54,6 +54,7 @@
 #include <EEPROM.h>
 #include <ATEMmin.h>
 #include <TallyServer.h>
+#include <RCVclient.h>
 #include <FastLED.h>
 
 #ifdef ESP32
@@ -128,6 +129,10 @@ CRGB color_led[8] = { CRGB::Black, CRGB::Red, CRGB::Lime, CRGB::Blue, CRGB::Yell
 #define MODE_PROGRAM_ONLY               3
 #define MODE_ON_AIR                     4
 
+//Define switcher types
+#define SWITCHER_ATEM                   1   // ATEM switcher or another tally light acting as tally server
+#define SWITCHER_RCV                    2   // RODECaster Video
+
 #define TALLY_FLAG_OFF                  0
 #define TALLY_FLAG_PROGRAM              1
 #define TALLY_FLAG_PREVIEW              2
@@ -163,6 +168,7 @@ ESP8266WebServer server(80);
 
 #ifndef TALLY_TEST_SERVER
 ATEMmin atemSwitcher;
+RCVclient rcvSwitcher;
 #else
 int tallyFlag = TALLY_FLAG_OFF;
 #endif
@@ -188,6 +194,9 @@ struct Settings {
     uint8_t neopixelStatusLEDOption;
     uint8_t neopixelBrightness;
     uint8_t ledBrightness;
+    //Added for RODECaster Video support. Appended at the end to keep existing settings valid.
+    uint8_t switcherType;
+    uint8_t rcvSceneInputs[RCV_MAX_SCENES]; //Bitmask per scene (A-G): bit n = input n+1 is part of the scene
 };
 
 Settings settings;
@@ -243,6 +252,16 @@ void setup() {
     settings.tallySubnetMask = IPAddress(settings.tallySubnetMask[0], settings.tallySubnetMask[1], settings.tallySubnetMask[2], settings.tallySubnetMask[3]);
     settings.tallyGateway = IPAddress(settings.tallyGateway[0], settings.tallyGateway[1], settings.tallyGateway[2], settings.tallyGateway[3]);
     settings.switcherIP = IPAddress(settings.switcherIP[0], settings.switcherIP[1], settings.switcherIP[2], settings.switcherIP[3]);
+
+    //Sanitize new settings (uninitialized EEPROM reads as 0xFF)
+    if (settings.switcherType != SWITCHER_RCV) {
+        settings.switcherType = SWITCHER_ATEM;
+    }
+    for (int i = 0; i < RCV_MAX_SCENES; i++) {
+        if (settings.rcvSceneInputs[i] > (1 << RCV_MAX_INPUTS) - 1) {
+            settings.rcvSceneInputs[i] = 0;
+        }
+    }
 
     //Initialize LED strip
     if (0 < settings.neopixelsAmount && settings.neopixelsAmount <= 1000) {
@@ -363,17 +382,29 @@ void loop() {
         case STATE_CONNECTING_TO_SWITCHER:
             // Initialize a connection to the switcher:
             if (firstRun) {
-                atemSwitcher.begin(settings.switcherIP);
-                //atemSwitcher.serialOutput(0xff); //Makes Atem library print debug info
+                if (isRcv()) {
+                    rcvSwitcher.begin(settings.switcherIP);
+                } else {
+                    atemSwitcher.begin(settings.switcherIP);
+                    //atemSwitcher.serialOutput(0xff); //Makes Atem library print debug info
+                }
                 Serial.println("------------------------");
-                Serial.println("Connecting to switcher...");
+                Serial.println(isRcv() ? "Connecting to RODECaster Video..." : "Connecting to switcher...");
                 Serial.println((String)"Switcher IP:         " + settings.switcherIP[0] + "." + settings.switcherIP[1] + "." + settings.switcherIP[2] + "." + settings.switcherIP[3]);
                 firstRun = false;
             }
-            atemSwitcher.runLoop();
-            if (atemSwitcher.isConnected()) {
-                changeState(STATE_RUNNING);
-                Serial.println("Connected to switcher");
+            if (isRcv()) {
+                rcvSwitcher.runLoop();
+                if (rcvSwitcher.isConnected()) {
+                    changeState(STATE_RUNNING);
+                    Serial.println("Connected to RODECaster Video");
+                }
+            } else {
+                atemSwitcher.runLoop();
+                if (atemSwitcher.isConnected()) {
+                    changeState(STATE_RUNNING);
+                    Serial.println("Connected to switcher");
+                }
             }
             break;
 #endif        
@@ -408,12 +439,25 @@ void loop() {
             }
 #else
             //Handle data exchange and connection to swithcher
-            atemSwitcher.runLoop();
+            if (isRcv()) {
+                rcvSwitcher.runLoop();
 
-            int tallySources = atemSwitcher.getTallyByIndexSources();
-            tallyServer.setTallySources(tallySources);
-            for (int i = 0; i < tallySources; i++) {
-                tallyServer.setTallyFlag(i, atemSwitcher.getTallyByIndexTallyFlags(i));
+                //Tally numbers 1-6 are RODECaster Video inputs 1-6. Scenes light up all inputs mapped to them.
+                if (rcvSwitcher.state().consumeChanged()) {
+                    printRcvState();
+                }
+                tallyServer.setTallySources(RCV_MAX_INPUTS);
+                for (int i = 0; i < RCV_MAX_INPUTS; i++) {
+                    tallyServer.setTallyFlag(i, rcvSwitcher.state().inputTallyFlags(i + 1, settings.rcvSceneInputs));
+                }
+            } else {
+                atemSwitcher.runLoop();
+
+                int tallySources = atemSwitcher.getTallyByIndexSources();
+                tallyServer.setTallySources(tallySources);
+                for (int i = 0; i < tallySources; i++) {
+                    tallyServer.setTallyFlag(i, atemSwitcher.getTallyByIndexTallyFlags(i));
+                }
             }
 #endif
 
@@ -429,8 +473,8 @@ void loop() {
             setLED2(color);
 
 #ifndef TALLY_TEST_SERVER
-            //Switch state if ATEM connection is lost...
-            if (!atemSwitcher.isConnected()) { // will return false if the connection was lost
+            //Switch state if switcher connection is lost...
+            if (!switcherConnected()) { // will return false if the connection was lost
                 Serial.println("------------------------");
                 Serial.println("Connection to Switcher lost...");
                 changeState(STATE_CONNECTING_TO_SWITCHER);
@@ -453,8 +497,12 @@ void loop() {
 
 #ifndef TALLY_TEST_SERVER
         //Force atem library to reset connection, in order for status to read correctly on website.
-        atemSwitcher.begin(settings.switcherIP);
-        atemSwitcher.connect();
+        if (isRcv()) {
+            rcvSwitcher.end();
+        } else {
+            atemSwitcher.begin(settings.switcherIP);
+            atemSwitcher.connect();
+        }
 #endif
 
         //Reset tally server's tally flags, They won't get the message, but it'll be reset for when the connectoin is back.
@@ -656,13 +704,67 @@ void printLeds() {
 }
 #endif
 
+bool isRcv() {
+#ifndef TALLY_TEST_SERVER
+    return settings.switcherType == SWITCHER_RCV;
+#else
+    return false;
+#endif
+}
+
+#ifndef TALLY_TEST_SERVER
+bool switcherConnected() {
+    return isRcv() ? rcvSwitcher.isConnected() : atemSwitcher.isConnected();
+}
+
+String rcvBusToString(RcvBus bus) {
+    switch (bus.type) {
+        case RCV_SRC_INPUT:
+            return "Input " + String(bus.id);
+        case RCV_SRC_SCENE: {
+            String s = "Scene " + String((char)('A' + bus.id - 1));
+            uint8_t mask = bus.id <= RCV_MAX_SCENES ? settings.rcvSceneInputs[bus.id - 1] : 0;
+            if (mask) {
+                s += " (inputs";
+                for (int i = 0; i < RCV_MAX_INPUTS; i++) {
+                    if (mask & (1 << i)) {
+                        s += " " + String(i + 1);
+                    }
+                }
+                s += ")";
+            } else {
+                s += " (no inputs mapped)";
+            }
+            return s;
+        }
+        case RCV_SRC_MEDIA:
+            return "Media " + String(bus.id);
+        default:
+            return "-";
+    }
+}
+
+void printRcvState() {
+    RcvParser &rcv = rcvSwitcher.state();
+    Serial.println("RCV program: " + rcvBusToString(rcv.program()) + ", preview: " + rcvBusToString(rcv.preview()) + (rcv.isStudioMode() ? " [studio]" : " [instant]") + (rcv.isStreaming() ? " [streaming]" : "") + (rcv.isRecording() ? " [recording]" : ""));
+}
+#endif
+
 int getTallyState(uint16_t tallyNo) {
 #ifndef TALLY_TEST_SERVER
-    if(tallyNo >= atemSwitcher.getTallyByIndexSources()) { //out of range
-        return TALLY_FLAG_OFF;
-    }
+    uint8_t tallyFlag;
+    if (isRcv()) {
+        if (tallyNo >= RCV_MAX_INPUTS) { //out of range
+            return TALLY_FLAG_OFF;
+        }
+        tallyFlag = rcvSwitcher.state().inputTallyFlags(tallyNo + 1, settings.rcvSceneInputs);
+    } else {
+        if(tallyNo >= atemSwitcher.getTallyByIndexSources()) { //out of range
+            return TALLY_FLAG_OFF;
+        }
 
-    uint8_t tallyFlag = atemSwitcher.getTallyByIndexTallyFlags(tallyNo);
+        tallyFlag = atemSwitcher.getTallyByIndexTallyFlags(tallyNo);
+    }
 #endif
     if (tallyFlag & TALLY_FLAG_PROGRAM) {
         return TALLY_FLAG_PROGRAM;
@@ -676,7 +778,11 @@ int getTallyState(uint16_t tallyNo) {
 int getLedColor(int tallyMode, int tallyNo) {
     if(tallyMode == MODE_ON_AIR) {
 #ifndef TALLY_TEST_SERVER
-        if(atemSwitcher.getStreamStreaming()) {
+        if (isRcv()) {
+            if (rcvSwitcher.state().isStreaming() || rcvSwitcher.state().isRecording()) {
+                return LED_RED;
+            }
+        } else if(atemSwitcher.getStreamStreaming()) {
             return LED_RED;
         }
 #endif
@@ -747,19 +853,30 @@ void handleRoot() {
     html += WiFi.gatewayIP().toString();
     html += "</td></tr><tr><td><br></td></tr>";
 #ifndef TALLY_TEST_SERVER
-    html += "<tr><td>ATEM switcher status:</td><td colspan=\"2\">";
+    html += "<tr><td>Switcher type:</td><td colspan=\"2\">";
+    html += isRcv() ? "RODECaster Video" : "ATEM / Tally server";
+    html += "</td></tr><tr><td>Switcher status:</td><td colspan=\"2\">";
     // if (atemSwitcher.hasInitialized())
     //     html += "Connected - Initialized";
     // else
-    if (atemSwitcher.isRejected())
+    if (!isRcv() && atemSwitcher.isRejected())
         html += "Connection rejected - No empty spot";
-    else if (atemSwitcher.isConnected())
+    else if (switcherConnected())
         html += "Connected"; // - Wating for initialization";
     else if (WiFi.status() == WL_CONNECTED)
         html += "Disconnected - No response from switcher";
     else
         html += "Disconnected - Waiting for WiFi";
-    html += "</td></tr><tr><td>ATEM switcher IP:</td><td colspan=\"2\">";
+    if (isRcv() && switcherConnected()) {
+        RcvParser &rcv = rcvSwitcher.state();
+        html += "</td></tr><tr><td>Program:</td><td colspan=\"2\">" + rcvBusToString(rcv.program());
+        html += "</td></tr><tr><td>Preview:</td><td colspan=\"2\">" + (rcv.isSwitchingModeKnown() && !rcv.isStudioMode() ? String("- (instant mode)") : rcvBusToString(rcv.preview()));
+        html += "</td></tr><tr><td>Streaming / recording:</td><td colspan=\"2\">";
+        html += rcv.isStreaming() ? "Streaming" : "Not streaming";
+        html += rcv.isRecording() ? ", recording" : ", not recording";
+        html += "</td></tr><tr><td>Messages received:</td><td colspan=\"2\">" + String(rcv.messageCount()) + " (last: " + String(rcv.lastAddress()) + ")";
+    }
+    html += "</td></tr><tr><td>Switcher IP:</td><td colspan=\"2\">";
     html += (String)settings.switcherIP[0] + '.' + settings.switcherIP[1] + '.' + settings.switcherIP[2] + '.' + settings.switcherIP[3];
     html += "</td></tr><tr><td><br></td></tr>";
 #endif
@@ -857,7 +974,16 @@ void handleRoot() {
     html += settings.tallyGateway[3];
     html += "\"required/></td></tr>";
 #ifndef TALLY_TEST_SERVER
-    html += "<tr><td><br></td></tr><tr><td>ATEM switcher IP: </td><td><input class=\"IP\"type=\"text\"size=\"3\"maxlength=\"3\"name=\"aIP1\"pattern=\"\\d{0,3}\"value=\"";
+    html += "<tr><td><br></td></tr><tr><td>Switcher type: </td><td><select name=\"swType\"><option value=\"";
+    html += (String) SWITCHER_ATEM + "\"";
+    if (settings.switcherType == SWITCHER_ATEM)
+        html += "selected";
+    html += ">ATEM / Tally server (other tally light)</option><option value=\"";
+    html += (String) SWITCHER_RCV + "\"";
+    if (settings.switcherType == SWITCHER_RCV)
+        html += "selected";
+    html += ">RODECaster Video</option></select></td></tr>";
+    html += "<tr><td>Switcher IP: </td><td><input class=\"IP\"type=\"text\"size=\"3\"maxlength=\"3\"name=\"aIP1\"pattern=\"\\d{0,3}\"value=\"";
     html += settings.switcherIP[0];
     html += "\"required/>. <input class=\"IP\"type=\"text\"size=\"3\"maxlength=\"3\"name=\"aIP2\"pattern=\"\\d{0,3}\"value=\"";
     html += settings.switcherIP[1];
@@ -866,6 +992,24 @@ void handleRoot() {
     html += "\"required/>. <input class=\"IP\"type=\"text\"size=\"3\"maxlength=\"3\"name=\"aIP4\"pattern=\"\\d{0,3}\"value=\"";
     html += settings.switcherIP[3];
     html += "\"required/></tr>";
+
+    //RODECaster Video scene to input mapping (picture in picture etc.)
+    html += "<tr><td><br></td></tr><tr><td style=\"vertical-align:top\">RODECaster Video scenes:<br><small>Inputs shown in each scene.<br>They light up when the scene<br>is on program or preview.</small></td><td colspan=\"2\"><table cellpadding=\"2\"><tr><td></td>";
+    for (int i = 0; i < RCV_MAX_INPUTS; i++) {
+        html += "<td>In " + String(i + 1) + "</td>";
+    }
+    html += "</tr>";
+    for (int sc = 0; sc < RCV_MAX_SCENES; sc++) {
+        html += "<tr><td>Scene " + String((char)('A' + sc)) + "</td>";
+        for (int i = 0; i < RCV_MAX_INPUTS; i++) {
+            html += "<td style=\"text-align:center\"><input type=\"checkbox\"name=\"sc" + String(sc) + "i" + String(i) + "\"value=\"1\"";
+            if (settings.rcvSceneInputs[sc] & (1 << i))
+                html += "checked";
+            html += "/></td>";
+        }
+        html += "</tr>";
+    }
+    html += "</table></td></tr>";
 #endif
     html += "<tr><td><br></td></tr><tr><td/><td style=\"float: right;\"><input type=\"submit\"value=\"Save Changes\"/></td></tr></form><tr bgcolor=\"#cccccc\"style=\"font-size: .8em;\"><td colspan=\"3\"><p>&nbsp;&copy; 2020-2022 <a href=\"https://aronhetlam.github.io/\">Aron N. Het Lam</a></p><p>&nbsp;Based on ATEM libraries for Arduino by <a href=\"https://www.skaarhoj.com/\">SKAARHOJ</a></p></td></tr></table></body></html>";
     server.send(200, "text/html", html);
@@ -881,6 +1025,14 @@ void handleSave() {
         String ssid;
         String pwd;
         bool change = false;
+#ifndef TALLY_TEST_SERVER
+        //Unchecked checkboxes are not posted, so clear the scene mapping before reading it
+        if (server.hasArg("swType")) {
+            for (int sc = 0; sc < RCV_MAX_SCENES; sc++) {
+                settings.rcvSceneInputs[sc] = 0;
+            }
+        }
+#endif
         for (uint8_t i = 0; i < server.args(); i++) {
             change = true;
             String var = server.argName(i);
@@ -940,6 +1092,15 @@ void handleSave() {
                 settings.switcherIP[2] = val.toInt();
             } else if (var == "aIP4") {
                 settings.switcherIP[3] = val.toInt();
+            } else if (var == "swType") {
+                settings.switcherType = val.toInt() == SWITCHER_RCV ? SWITCHER_RCV : SWITCHER_ATEM;
+            } else if (var.length() == 5 && var.startsWith("sc") && var[3] == 'i') {
+                //Scene mapping checkbox: "sc<scene>i<input>"
+                int sc = var[2] - '0';
+                int in = var[4] - '0';
+                if (sc >= 0 && sc < RCV_MAX_SCENES && in >= 0 && in < RCV_MAX_INPUTS && val == "1") {
+                    settings.rcvSceneInputs[sc] |= (1 << in);
+                }
             }
         }
 

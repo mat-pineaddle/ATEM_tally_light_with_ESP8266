@@ -17,3 +17,7 @@ _site
 .jekyll-cache
 .jekyll-metadata
 vendor
+tools/rcv_show.xml
+.DS_Store
+__pycache__/
+rcv_show.xml

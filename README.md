@@ -1,5 +1,7 @@
 # ATEM-tally-light
 
+> **Fork z obsługą RØDECaster Video** – zobacz [RODECASTER.md](RODECASTER.md).
+
 [![GitHub release](https://img.shields.io/github/v/release/AronHetLam/ATEM_tally_light_with_ESP8266)](https://github.com/AronHetLam/ATEM_tally_light_with_ESP8266/releases/latest)
 [![License](https://img.shields.io/github/license/AronHetLam/ATEM_tally_light_with_ESP8266)](LICENSE)
 
