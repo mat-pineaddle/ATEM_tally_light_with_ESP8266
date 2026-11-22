@@ -61,9 +61,14 @@ select {
 
 </style>
 
+Firmware for ATEM switchers **and RØDECaster Video**. Works in Chrome or Edge on a computer (Web Serial).
+
 1. Plug your ESP into a USB port. 
 2. Select the firmware version you want and hit `install`.
 3. Select the correct com port, and follow the instructions.
+4. Connect to the WiFi network "Tally Light setup", open [192.168.4.1](http://192.168.4.1) and set up WiFi, switcher type and switcher IP.
+
+**PL:** Podłącz płytkę przez USB, wybierz wariant i kliknij `Install` (Chrome/Edge na komputerze). Potem połącz się z siecią WiFi „Tally Light setup”, otwórz [192.168.4.1](http://192.168.4.1) i ustaw WiFi, typ miksera oraz jego IP. Instrukcja dla RØDECaster Video: [RODECASTER.md](https://github.com/mat-pineaddle/ATEM_tally_light_with_ESP8266/blob/rodecaster-video/RODECASTER.md).
 
 <p>
 <select id="manifests">
@@ -91,7 +96,7 @@ Powered by [ESP Web Tools](https://esphome.github.io/esp-web-tools/)
 
 <br>
 <br>
-Thank you for using my work!<br>
-If you like it please consider supporting. 
+RØDECaster Video support: [mat-pineaddle/ATEM_tally_light_with_ESP8266](https://github.com/mat-pineaddle/ATEM_tally_light_with_ESP8266/tree/rodecaster-video).<br>
+Based on the original project by [Aron N. Het Lam](https://github.com/AronHetLam/ATEM_tally_light_with_ESP8266). If you like it please consider supporting him. 
 
 <a href="https://www.buymeacoffee.com/aronhetlam" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>

@@ -2,6 +2,8 @@
 title: ATEM tally light
 ---
 
+> **RØDECaster Video support:** this fork can also work with the RØDECaster Video. One tally light connects to the RCV and acts as tally server for the others, and all cameras in a picture-in-picture scene light up automatically. Firmware: [Web installer](install.html). Setup guide (Polish): [RODECASTER.md](https://github.com/mat-pineaddle/ATEM_tally_light_with_ESP8266/blob/rodecaster-video/RODECASTER.md).
+
 Wireless tally light for use with ATEM switchers. Connects over WiFi using only a D1 mini board (ESP8266 WiFi module) and a RGB LED. This solution is __not__ limited by the ATEM switchers' connection limit, making it possible to connect as many as you need.
 
 Should easily be convertable to use with regular Arduino boards and an ESP8266 module, by changeing the include statements and a few other things (however, this is not tested).

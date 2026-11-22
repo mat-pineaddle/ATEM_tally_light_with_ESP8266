@@ -14,10 +14,13 @@ PUBLISH_BIN = "{}ATEM_tally_light_{}_{}.bin".format(
     PUBLISH_DIR_FULL, VERSION, PIOENV)
 
 def _get_cpp_define_value(env, define: str):
-    define_list = [(item[-1] if item[0] == define else "")
-                   for item in env["CPPDEFINES"] if item == define or item[0] == define]
-    if define_list:
-        return define_list[0]
+    # CPPDEFINES holds plain strings ("NAME") and tuples/lists (NAME, value).
+    # Newer platforms can also contain empty strings, so check types explicitly.
+    for item in env["CPPDEFINES"]:
+        if isinstance(item, (list, tuple)) and len(item) > 0 and item[0] == define:
+            return item[-1]
+        if item == define:
+            return ""
 
     return None
 
