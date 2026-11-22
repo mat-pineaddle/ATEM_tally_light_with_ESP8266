@@ -113,6 +113,9 @@
 #define LED_PINK    5
 #define LED_WHITE   6
 #define LED_ORANGE  7
+#define LED_IDLE    8   //Dimmed "connected, not in program or preview" color, see settings.idleColor
+
+#define DEFAULT_IDLE_BRIGHTNESS 20
 
 //Map "old" LED colors to CRGB colors
 CRGB color_led[8] = { CRGB::Black, CRGB::Red, CRGB::Lime, CRGB::Blue, CRGB::Yellow, CRGB::Fuchsia, CRGB::White, CRGB::Orange };
@@ -198,6 +201,8 @@ struct Settings {
     uint8_t switcherType;
     uint8_t rcvSceneInputs[RCV_MAX_SCENES]; //Manual bitmask per scene (A-G): bit n = input n+1 is part of the scene
     uint8_t rcvAutoScenes;                  //1 = also use the scene layout read from the RCV (video layers of each scene)
+    uint8_t idleColor;                      //Color shown when running but neither in program nor preview (LED_OFF = off)
+    uint8_t idleBrightness;                 //Brightness of the idle color, 1-255
 };
 
 Settings settings;
@@ -265,6 +270,13 @@ void setup() {
     }
     if (settings.rcvAutoScenes > 1) {
         settings.rcvAutoScenes = 1; //Automatic scene mapping is on by default
+    }
+    if (!isValidIdleColor(settings.idleColor)) {
+        settings.idleColor = LED_OFF; //Idle color is off by default (same as before)
+        settings.idleBrightness = DEFAULT_IDLE_BRIGHTNESS;
+    }
+    if (settings.idleBrightness == 0) {
+        settings.idleBrightness = DEFAULT_IDLE_BRIGHTNESS;
     }
 
     //Initialize LED strip
@@ -581,94 +593,51 @@ void setLED2(uint8_t color) {
     setLED(color, PIN_RED2, PIN_GREEN2, PIN_BLUE2);
 }
 
-//Set the color of a LED using the given pins
-void setLED(uint8_t color, int pinRed, int pinGreen, int pinBlue) {
-#ifdef ESP32
-    switch (color) {
-        case LED_OFF:
-            digitalWrite(pinRed, 0);
-            digitalWrite(pinGreen, 0);
-            digitalWrite(pinBlue, 0);
-            break;
-        case LED_RED:
-            digitalWrite(pinRed, 1);
-            digitalWrite(pinGreen, 0);
-            digitalWrite(pinBlue, 0);
-            break;
-        case LED_GREEN:
-            digitalWrite(pinRed, 0);
-            digitalWrite(pinGreen, 1);
-            digitalWrite(pinBlue, 0);
-            break;
-        case LED_BLUE:
-            digitalWrite(pinRed, 0);
-            digitalWrite(pinGreen, 0);
-            digitalWrite(pinBlue, 1);
-            break;
-        case LED_YELLOW:
-            digitalWrite(pinRed, 1);
-            digitalWrite(pinGreen, 1);
-            digitalWrite(pinBlue, 0);
-            break;
-        case LED_PINK:
-            digitalWrite(pinRed, 1);
-            digitalWrite(pinGreen, 0);
-            digitalWrite(pinBlue, 1);
-            break;
-        case LED_WHITE:
-            digitalWrite(pinRed, 1);
-            digitalWrite(pinGreen, 1);
-            digitalWrite(pinBlue, 1);
-            break;
-    }
-#else
-    uint8_t ledBrightness = settings.ledBrightness;
-    void (*writeFunc)(uint8_t, uint8_t);
-    if(ledBrightness >= 0xff) {
-        writeFunc = &digitalWrite;
-        ledBrightness = 1;
-    } else {
-        writeFunc = &analogWriteWrapper;
-    }
+bool isValidIdleColor(uint8_t color) {
+    return color == LED_OFF || color == LED_BLUE || color == LED_ORANGE || color == LED_WHITE || color == LED_PINK || color == LED_YELLOW;
+}
 
-    switch (color) {
-        case LED_OFF:
-            digitalWrite(pinRed, 0);
-            digitalWrite(pinGreen, 0);
-            digitalWrite(pinBlue, 0);
-            break;
-        case LED_RED:
-            writeFunc(pinRed, ledBrightness);
-            digitalWrite(pinGreen, 0);
-            digitalWrite(pinBlue, 0);
-            break;
-        case LED_GREEN:
-            digitalWrite(pinRed, 0);
-            writeFunc(pinGreen, ledBrightness);
-            digitalWrite(pinBlue, 0);
-            break;
-        case LED_BLUE:
-            digitalWrite(pinRed, 0);
-            digitalWrite(pinGreen, 0);
-            writeFunc(pinBlue, ledBrightness);
-            break;
-        case LED_YELLOW:
-            writeFunc(pinRed, ledBrightness);
-            writeFunc(pinGreen, ledBrightness);
-            digitalWrite(pinBlue, 0);
-            break;
-        case LED_PINK:
-            writeFunc(pinRed, ledBrightness);
-            digitalWrite(pinGreen, 0);
-            writeFunc(pinBlue, ledBrightness);
-            break;
-        case LED_WHITE:
-            writeFunc(pinRed, ledBrightness);
-            writeFunc(pinGreen, ledBrightness);
-            writeFunc(pinBlue, ledBrightness);
-            break;
+//The idle color, dimmed to the idle brightness
+CRGB getIdleRGB() {
+    CRGB c = color_led[isValidIdleColor(settings.idleColor) ? settings.idleColor : LED_OFF];
+    c.nscale8_video(settings.idleBrightness);
+    return c;
+}
+
+//Write one color channel: 0 = off, 255 = fully on, anything else is PWM dimmed
+void writeLEDChannel(uint8_t pin, uint8_t value) {
+#ifdef ESP32
+    //Always use PWM on the ESP32, so the pin stays attached to the same PWM channel
+    analogWrite(pin, value);
+#else
+    if (value == 0) {
+        digitalWrite(pin, 0);
+    } else if (value == 0xff) {
+        digitalWrite(pin, 1);
+    } else {
+        analogWriteWrapper(pin, value);
     }
 #endif
+}
+
+//Set the color of a LED using the given pins
+void setLED(uint8_t color, int pinRed, int pinGreen, int pinBlue) {
+    CRGB c;
+    if (color == LED_IDLE) {
+        c = getIdleRGB();
+    } else if (color < sizeof(color_led) / sizeof(color_led[0])) {
+        c = color_led[color];
+        //Pure colors (0/255 per channel) scaled with the LED brightness setting
+        uint8_t ledBrightness = settings.ledBrightness;
+        c.r = c.r == 0xff ? ledBrightness : scale8(c.r, ledBrightness);
+        c.g = c.g == 0xff ? ledBrightness : scale8(c.g, ledBrightness);
+        c.b = c.b == 0xff ? ledBrightness : scale8(c.b, ledBrightness);
+    } else {
+        c = CRGB::Black;
+    }
+    writeLEDChannel(pinRed, c.r);
+    writeLEDChannel(pinGreen, c.g);
+    writeLEDChannel(pinBlue, c.b);
 }
 
 void analogWriteWrapper(uint8_t pin, uint8_t value) {
@@ -677,9 +646,10 @@ void analogWriteWrapper(uint8_t pin, uint8_t value) {
 
 //Set the color of the LED strip, except for the status LED
 void setSTRIP(uint8_t color) {
-    if(numTallyLEDs > 0 && tallyLEDs[0] != color_led[color]) {
+    CRGB c = color == LED_IDLE ? getIdleRGB() : color_led[color];
+    if(numTallyLEDs > 0 && tallyLEDs[0] != c) {
         for (int i = 0; i < numTallyLEDs; i++) {
-            tallyLEDs[i] = color_led[color];
+            tallyLEDs[i] = c;
         }
         neopixelsUpdated = true;
 #ifdef DEBUG_LED_STRIP
@@ -844,7 +814,7 @@ int getLedColor(int tallyMode, int tallyNo) {
                && tallyMode != MODE_PROGRAM_ONLY) {     //and not program only
         return LED_GREEN;
     } else {                                            //if tally is neither
-        return LED_OFF;
+        return settings.idleColor != LED_OFF ? LED_IDLE : LED_OFF; //dim "connected" color, if enabled
     }
 }
 
@@ -992,6 +962,19 @@ void handleRoot() {
         html += "selected";
     html += ">On Air</option></select></td></tr><tr><td> Led brightness: </td><td><input type=\"number\"size=\"5\"min=\"0\"max=\"255\"name=\"ledBright\"value=\"";
     html += settings.ledBrightness;
+    html += "\"required/></td></tr><tr><td>Idle color:<br><small>When connected, but neither<br>in program nor preview</small></td><td style=\"vertical-align:top\"><select name=\"idleColor\">";
+    {
+        const uint8_t idleColors[] = { LED_OFF, LED_BLUE, LED_ORANGE, LED_WHITE, LED_PINK, LED_YELLOW };
+        const char *idleNames[] = { "Off", "Blue", "Orange", "White", "Pink", "Yellow" };
+        for (uint8_t k = 0; k < sizeof(idleColors); k++) {
+            html += "<option value=\"" + String(idleColors[k]) + "\"";
+            if (settings.idleColor == idleColors[k])
+                html += "selected";
+            html += ">" + String(idleNames[k]) + "</option>";
+        }
+    }
+    html += "</select> brightness: <input type=\"number\"size=\"5\"min=\"1\"max=\"255\"name=\"idleBright\"value=\"";
+    html += settings.idleBrightness;
     html += "\"required/></td></tr><tr><td><br></td></tr><tr><td>Amount of Neopixels:</td><td><input type=\"number\"size=\"5\"min=\"0\"max=\"1000\"name=\"neoPxAmount\"value=\"";
     html += settings.neopixelsAmount;
     html += "\"required/></td></tr><tr><td>Neopixel status LED: </td><td><select name=\"neoPxStatus\"><option value=\"";
@@ -1132,6 +1115,10 @@ void handleSave() {
                 settings.tallyModeLED1 = val.toInt();
             } else if (var == "tModeLED2") {
                 settings.tallyModeLED2 = val.toInt();
+            } else if (var == "idleColor") {
+                settings.idleColor = isValidIdleColor(val.toInt()) ? val.toInt() : LED_OFF;
+            } else if (var == "idleBright") {
+                settings.idleBrightness = constrain(val.toInt(), 1, 255);
             } else if (var == "ledBright") {
                 settings.ledBrightness = val.toInt();
             } else if (var == "neoPxAmount") {

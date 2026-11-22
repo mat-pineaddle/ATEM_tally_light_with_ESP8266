@@ -39,6 +39,12 @@ void setLED(uint8_t color, int pinRed, int pinGreen, int pinBlue);
 
 void analogWriteWrapper(uint8_t pin, uint8_t value);
 
+//True for colors that can be used as idle color
+bool isValidIdleColor(uint8_t color);
+
+//Write one LED color channel (0 = off, 255 = on, else PWM)
+void writeLEDChannel(uint8_t pin, uint8_t value);
+
 //Set the color of the LED strip, except for the status LED
 void setSTRIP(uint8_t color);
 

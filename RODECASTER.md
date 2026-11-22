@@ -58,6 +58,19 @@ Media (klipy) na programie nie zapalają żadnej kamery.
 - **Studio**: program jest czerwony, podgląd zielony.
 - **Instant**: RCV nie ma podglądu, więc świeci tylko program.
 
+## Kolor „gotowości” (idle)
+
+Domyślnie lampka, która nie jest ani na programie, ani na podglądzie, jest zgaszona. Wtedy nie widać, czy działa, czy straciła połączenie.
+W ustawieniach jest opcja **Idle color**: przyciemniony kolor, który świeci, gdy lampka jest połączona, a kamera nie jest używana.
+
+- Kolory do wyboru: niebieski, pomarańczowy, biały, różowy, żółty albo wyłączony (domyślnie).
+- **Brightness** (1–255) ustawia jasność tego koloru niezależnie od jasności tally. Domyślnie jest 20, czyli ledwo widoczne światło.
+- Najmniej rzuca się w oczy **pomarańczowy** przy jasności 10–30. Pasek NeoPixel też używa go jako przyciemnionego „działa”.
+- Te same kolory przy pełnej jasności oznaczają stany połączenia (niebieski: łączenie z WiFi, biały: brak WiFi, różowy: łączenie z mikserem). Dlatego idle jest zawsze przyciemniony.
+- Przyciemnianie działa na zwykłych diodach RGB (ESP8266 i ESP32) oraz na paskach NeoPixel. Nie dotyczy trybu *On Air*.
+
+Opcję ustawia się na każdej lampce osobno, bo to jej własny wygląd.
+
 ## Tryb „On Air”
 
 Dla RCV lampka w trybie On Air świeci na czerwono, gdy trwa **streaming lub nagrywanie**.
