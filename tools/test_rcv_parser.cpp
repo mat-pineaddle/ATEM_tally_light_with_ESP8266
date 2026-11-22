@@ -1,8 +1,12 @@
 // Native unit test for RcvParser (no Arduino needed).
-//   c++ -std=c++11 -Wall -Wextra -I libraries/RCVclient libraries/RCVclient/RcvParser.cpp tools/test_rcv_parser.cpp -o /tmp/rcvtest && /tmp/rcvtest
+//   c++ -std=c++11 -Wall -Wextra -I libraries/RCVclient libraries/RCVclient/RcvParser.cpp tools/test_rcv_parser.cpp -o /tmp/rcvtest && /tmp/rcvtest [rcv_show.xml]
+//
+// Optional argument: a /show XML dump saved by tools/rcv_monitor.py. The detected scene layout is printed.
 
 #include "RcvParser.h"
 #include <cstdio>
+#include <fstream>
+#include <sstream>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -54,7 +58,87 @@ static void feedChunked(RcvParser &p, const Bytes &b, size_t chunk = 7) {
     }
 }
 
-int main() {
+static const char *SAMPLE_XML =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    "<RcvShow version=\"1\" PvwScene=\"-64\"\n PgmScene=\"-65\" switching_mode=\"studioLeft\" name=\"Default\">\n"
+    "  <Streams/>\n"
+    "  <MediaFiles><File name=\"\" file_path=\"\"/></MediaFiles>\n"
+    "  <VideoInputs><value name=\"Cam 1\" source=\"hdmi\"/></VideoInputs>\n"
+    "  <Scenes>\n"
+    "    <Scene name=\"SCENE A\" transition=\"fade\" border_colour=\"ff167e7d\">\n"
+    "      <VideoLayers>\n"
+    "        <Layer source=\"videoInput\" source_file=\"3\" video_enabled=\"true\" transform=\"0 0 1920 1080 | 0 0 1920 1080 | 1267 690 603 340 | 0\"/>\n"
+    "        <Layer source=\"videoInput\" source_file=\"1\" video_enabled=\"true\" transform=\"0 0 1920 1080 | 0 0 1920 1080 | 0 0 1920 1080 | 0\"/>\n"
+    "      </VideoLayers>\n"
+    "    </Scene>\n"
+    "    <Scene name=\"SCENE B\" transition=\"fade\">\n"
+    "      <VideoLayers>\n"
+    "        <Layer source=\"videoInput\" source_file=\"2\" video_enabled=\"true\" transform=\"x\"\n               name=\"\"/>\n"
+    "        <Layer source=\"videoInput\" source_file=\"4\" video_enabled=\"false\"/>\n"
+    "        <Layer source=\"mediaFile\" source_file=\"5\" video_enabled=\"true\"/>\n"
+    "      </VideoLayers>\n"
+    "    </Scene>\n"
+    "    <Scene name=\"\" transition=\"fade\">\n"
+    "      <VideoLayers/>\n"
+    "    </Scene>\n"
+    "  </Scenes>\n"
+    "  <Overlays size=\"dynamic\"><Overlay><VideoLayers><Layer source=\"videoInput\" source_file=\"6\"/></VideoLayers></Overlay></Overlays>\n"
+    "</RcvShow>\n";
+
+int main(int argc, char **argv) {
+    // --- Scene layout from the /show XML dump ---
+    {
+        RcvParser p;
+        std::string xml(SAMPLE_XML);
+        xml += std::string(500, ' '); // make sure it is streamed
+        feedChunked(p, frame(msg("/show", {S(xml)})), 11);
+        CHECK(p.isSceneLayoutKnown());
+        CHECK(p.sceneInputs(1) == 0b000101);   // A: inputs 1 + 3
+        CHECK(p.sceneInputs(2) == 0b000010);   // B: input 2 (4 disabled, media ignored)
+        CHECK(p.sceneInputs(3) == 0);
+        CHECK(p.sceneInputs(7) == 0);          // not in the dump
+        CHECK(strcmp(p.sceneName(1), "SCENE A") == 0);
+        CHECK(strcmp(p.sceneName(2), "SCENE B") == 0);
+        // Negative PgmScene/PvwScene values (seen on a real device) give no startup hint
+        CHECK(p.program().type == RCV_SRC_NONE);
+        CHECK(p.isSwitchingModeKnown() && p.isStudioMode());
+
+        // Use the detected layout for tally
+        uint8_t m[RCV_MAX_SCENES];
+        for (int i = 0; i < RCV_MAX_SCENES; i++) m[i] = p.sceneInputs(i + 1);
+        feedChunked(p, frame(msg("/show/pgmcurrent", {S("scene"), I(1)})));
+        feedChunked(p, frame(msg("/show/pvwcurrent", {S("scene"), I(2)})));
+        CHECK(p.inputTallyFlags(1, m) == RCV_TALLY_FLAG_PROGRAM);
+        CHECK(p.inputTallyFlags(3, m) == RCV_TALLY_FLAG_PROGRAM);
+        CHECK(p.inputTallyFlags(2, m) == RCV_TALLY_FLAG_PREVIEW);
+        CHECK(p.inputTallyFlags(4, m) == 0);
+        CHECK(p.inputTallyFlags(6, m) == 0);   // only in an overlay, not in a scene
+
+        // A scene edit asks for a resync; a truncated dump does not wipe the known layout
+        feedChunked(p, frame(msg("/show/scene/1/name", {S("New name")})));
+        CHECK(p.consumeResyncRequest());
+        CHECK(p.sceneInputs(1) == 0b000101);
+    }
+
+    // --- Optional: real dump from a file ---
+    if (argc > 1) {
+        std::ifstream f(argv[1]);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        RcvParser p;
+        feedChunked(p, frame(msg("/show", {S(ss.str())})), 1460);
+        printf("%s: %u bytes, layout known: %s, mode: %s\n", argv[1], (unsigned)ss.str().size(),
+               p.isSceneLayoutKnown() ? "yes" : "no", p.isStudioMode() ? "studio" : "instant");
+        for (int sc = 1; sc <= RCV_MAX_SCENES; sc++) {
+            printf("  Scene %c \"%s\": inputs", 'A' + sc - 1, p.sceneName(sc));
+            for (int i = 0; i < RCV_MAX_INPUTS; i++) {
+                if (p.sceneInputs(sc) & (1 << i)) printf(" %d", i + 1);
+            }
+            printf("\n");
+        }
+        CHECK(p.isSceneLayoutKnown());
+    }
+
     uint8_t masks[RCV_MAX_SCENES] = {0};
     masks[1] = 0b000011; // Scene B = inputs 1 + 2 (picture in picture)
     masks[2] = 0b000110; // Scene C = inputs 2 + 3

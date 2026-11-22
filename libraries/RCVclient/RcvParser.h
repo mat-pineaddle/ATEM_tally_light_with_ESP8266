@@ -75,6 +75,12 @@ public:
     // sceneInputMasks: RCV_MAX_SCENES bitmasks, bit n = input n+1 is part of that scene.
     uint8_t inputTallyFlags(uint8_t inputNo, const uint8_t *sceneInputMasks) const;
 
+    // Scene composition read from the /show XML dump (<Scene><VideoLayers><Layer source="videoInput" source_file="N"/>).
+    // Bitmask of inputs visible in a scene (1-based scene number, 1-7 = A-G).
+    bool isSceneLayoutKnown() const { return _scenesKnown; }
+    uint8_t sceneInputs(uint8_t sceneNo) const;
+    const char *sceneName(uint8_t sceneNo) const;
+
     bool isStudioMode() const { return _studioMode; }
     bool isSwitchingModeKnown() const { return _modeKnown; }
     bool isStreaming() const { return _streaming; }
@@ -83,7 +89,7 @@ public:
     // True once the stream is unrecoverable (bad length prefix). The connection should be reset.
     bool hasProtocolError() const { return _protocolError; }
 
-    // True (once) when the device asked us to re-request the show state (switching mode changed).
+    // True (once) when the show state should be re-requested (switching mode or a scene changed).
     bool consumeResyncRequest();
 
     // True (once) after any tally relevant change.
@@ -110,14 +116,29 @@ private:
     uint8_t _buf[RCV_PARSER_BUFFER + 1];
     bool _xmlMode;
 
-    // XML attribute scanner state (for the /show dump)
+    // Streaming XML scanner state (for the /show dump)
     uint8_t _xState;
+    char _xTag[16];
+    uint8_t _xTagLen;
+    bool _xClosing;
+    bool _xSelfClosing;
+    uint8_t _xElement;              // which element the current attributes belong to
     char _xName[24];
     uint8_t _xNameLen;
     char _xValue[32];
     uint8_t _xValueLen;
     char _xQuote;
-    bool _xPgmFound, _xPvwFound, _xModeFound;
+    bool _xInScenes;
+    uint8_t _xSceneNo;              // 1-based number of the current <Scene>
+    bool _xLayerIsInput, _xLayerEnabled;
+    uint8_t _xLayerInput;
+    uint8_t _xSceneInputs[RCV_MAX_SCENES];
+    char _xSceneNames[RCV_MAX_SCENES][17];
+
+    // Scene composition from the last complete /show dump
+    bool _scenesKnown;
+    uint8_t _sceneInputs[RCV_MAX_SCENES];
+    char _sceneNames[RCV_MAX_SCENES][17];
 
     // Tally state
     RcvBus _pgm, _pvw;              // authoritative, from /show/pgmcurrent and /show/pvwcurrent
@@ -139,7 +160,10 @@ private:
     void _dispatch(const char *address, const OscArg *args, uint8_t argc);
 
     void _xmlReset();
+    void _xmlEnd();
     void _xmlByte(uint8_t c);
+    void _xmlTagStart();
+    void _xmlTagEnd();
     void _xmlAttribute(const char *name, const char *value);
 
     static bool _busContainsInput(const RcvBus &bus, uint8_t inputNo, const uint8_t *sceneInputMasks);

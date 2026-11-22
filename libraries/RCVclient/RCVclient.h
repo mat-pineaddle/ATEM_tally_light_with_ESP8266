@@ -27,6 +27,8 @@
 #define RCV_RECONNECT_INTERVAL      5000
 #define RCV_CONNECT_TIMEOUT         1500
 #define RCV_MAX_BYTES_PER_LOOP      2048
+#define RCV_RESYNC_DELAY            1000    // coalesce bursts of scene edits into one /show request
+#define RCV_RESYNC_QUIET_TIME       3000    // ignore resync triggers right after a request (they may be part of the reply)
 
 class RCVclient {
 public:
@@ -54,6 +56,9 @@ private:
     bool _connected;
     unsigned long _lastAttempt;
     uint32_t _connectionAttempts;
+    bool _resyncPending;
+    unsigned long _resyncRequestedAt;
+    unsigned long _lastRequestAt;
 
     void _connect();
     void _sendRequests();

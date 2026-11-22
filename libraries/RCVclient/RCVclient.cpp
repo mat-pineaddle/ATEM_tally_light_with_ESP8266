@@ -14,7 +14,10 @@ RCVclient::RCVclient() :
     _begun(false),
     _connected(false),
     _lastAttempt(0),
-    _connectionAttempts(0) {
+    _connectionAttempts(0),
+    _resyncPending(false),
+    _resyncRequestedAt(0),
+    _lastRequestAt(0) {
 }
 
 void RCVclient::begin(IPAddress ip, uint16_t port) {
@@ -79,7 +82,12 @@ void RCVclient::runLoop() {
         return;
     }
 
-    if (_parser.consumeResyncRequest()) {
+    if (_parser.consumeResyncRequest() && millis() - _lastRequestAt >= RCV_RESYNC_QUIET_TIME) {
+        _resyncPending = true;
+        _resyncRequestedAt = millis();
+    }
+    if (_resyncPending && millis() - _resyncRequestedAt >= RCV_RESYNC_DELAY) {
+        _resyncPending = false;
         _sendRequests();
     }
 }
@@ -103,10 +111,12 @@ void RCVclient::_connect() {
 
     _client.setNoDelay(true);
     _connected = true;
+    _resyncPending = false;
     _sendRequests();
 }
 
 void RCVclient::_sendRequests() {
+    _lastRequestAt = millis();
     _sendOsc("/show");
     _sendOsc("/remote");
 }

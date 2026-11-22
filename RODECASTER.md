@@ -26,15 +26,30 @@ RØDECaster Video ──TCP 10024 (OSC)──► Płytka „master” (typ: RODE
 
 ## Sceny i picture-in-picture
 
-Protokół RCV mówi tylko, **która scena** jest na programie lub podglądzie. Nie mówi, jakie kamery są w środku sceny.
-Dlatego na stronie konfiguracji **płytki master** jest tabela *RODECaster Video scenes*. Zaznacz w niej, które wejścia są widoczne w scenach A–G.
+Master **sam odczytuje skład scen z RCV**. Po połączeniu mikser wysyła pełny opis show (XML), a w nim warstwy każdej sceny, np.:
 
-Przykład: scena B to PiP z kamerą 1 i 2. Zaznaczasz *Scene B → In 1, In 2*. Gdy scena B jest:
-- na programie, lampki 1 i 2 świecą na **czerwono**,
-- na podglądzie (tryb studio), lampki 1 i 2 świecą na **zielono**.
+```xml
+<Scene name="SCENE A">
+  <VideoLayers>
+    <Layer source="videoInput" source_file="3" video_enabled="true" .../>
+    <Layer source="videoInput" source_file="1" video_enabled="true" .../>
+  </VideoLayers>
+</Scene>
+```
 
-Ta sama kamera może być jednocześnie w scenie na programie i w scenie na podglądzie. Wtedy wygrywa program (czerwony), tak samo jak w ATEM.
-Mapowanie scen trzeba ustawić **tylko na masterze**, bo pozostałe lampki dostają gotowy stan.
+Scena A zawiera więc wejścia 1 i 3. Gdy jest:
+- na programie, lampki 1 i 3 świecą na **czerwono**,
+- na podglądzie (tryb studio), lampki 1 i 3 świecą na **zielono**.
+
+Zasady:
+- Liczą się tylko warstwy `videoInput` z `video_enabled="true"`. Warstwy z plikami (np. tło `tlo.jpg`) i overlaye nie zapalają kamer.
+- Kamera, która jest jednocześnie w scenie na programie i w scenie na podglądzie, świeci na czerwono, tak samo jak w ATEM.
+- Gdy zmienisz scenę na mikserze, RCV wysyła komunikat `/show/scene/...`, a master po sekundzie pobiera opis show od nowa.
+- Wykryte wejścia widać na stronie mastera w kolumnie *Detected*.
+
+Automatyczne wykrywanie włącza i wyłącza opcja *Detect inputs in scenes automatically* (domyślnie włączona).
+Pole wyboru *In 1–6* przy każdej scenie pozwala **dodać** wejścia ręcznie. Przydaje się to, gdy wykrywanie jest wyłączone albo czegoś nie złapało. Wejścia ręczne i wykryte sumują się.
+Wszystko ustawia się **tylko na masterze**, bo pozostałe lampki dostają gotowy stan.
 
 Media (klipy) na programie nie zapalają żadnej kamery.
 
@@ -53,7 +68,7 @@ Dla RCV lampka w trybie On Air świeci na czerwono, gdy trwa **streaming lub nag
 2. **Master:** otwórz stronę płytki (`http://<ip płytki>`) i ustaw:
    - *Switcher type* = **RODECaster Video**,
    - *Switcher IP* = IP miksera RCV (najlepiej ustaw w RCV stały adres albo rezerwację DHCP),
-   - mapowanie scen,
+   - zostaw włączone *Detect inputs in scenes automatically*,
    - *Tally Light number*, jeśli master też jest lampką na kamerze.
 3. **Pozostałe płytki:** *Switcher type* = **ATEM / Tally server**, *Switcher IP* = IP mastera. Masterowi warto ustawić stały IP (*Use static IP*).
 
@@ -74,9 +89,9 @@ Można też użyć GitHub Actions (`.github/workflows/build_binaries.yml`), któ
 Narzędzia wymagają tylko Pythona 3, bez dodatkowych pakietów.
 
 - **`rcv_monitor.py <ip RCV>`** łączy się z prawdziwym RCV i wypisuje wszystko, co przychodzi. Zapisuje też pełny zrzut `/show` (XML) do `rcv_show.xml`.
-  **Uruchom go najpierw z prawdziwym mikserem.** Pokaże, czy protokół zachowuje się zgodnie z założeniami. Zrzut XML może też zdradzić, które wejścia są w scenach, a wtedy da się dodać automatyczne mapowanie.
+  Uruchom go z prawdziwym mikserem, gdy coś nie działa. Pokaże, co dokładnie wysyła RCV.
 - **`rcv_simulator.py`** to udawany RCV do testów lampek bez miksera. Ustaw na masterze IP komputera i wpisuj komendy, np. `p 2`, `ps B`, `v 3`, `cut`, `instant`.
-- **`test_rcv_parser.cpp`** to testy jednostkowe parsera, uruchamiane na komputerze (komenda kompilacji jest w pliku).
+- **`test_rcv_parser.cpp`** to testy jednostkowe parsera, uruchamiane na komputerze (komenda kompilacji jest w pliku). Jako argument można podać zapisany `rcv_show.xml`, a test wypisze wykryty skład scen.
 
 ## Co jest niepewne (do sprawdzenia na prawdziwym RCV)
 
@@ -84,5 +99,5 @@ Protokół nie jest oficjalnie udokumentowany. Wszystko pochodzi z kodu [modułu
 
 - `/show/pgmcurrent` i `/show/pvwcurrent` są głównym źródłem stanu i mają numerację od 1. Moduł Companion polega na nich tak samo.
 - Stan zaraz po połączeniu, zanim przyjdzie pierwsze `pgmcurrent`, jest zgadywany. Najpierw z kolorów przycisków wejść (`/device/buttons/8..13/colour`), potem z atrybutów `PgmScene`/`PvwScene` w XML.
-  Atrybuty XML są traktowane jako numerowane od 0, tak jak w Companion. Jeśli wyjdzie inaczej, zmień `RCV_XML_SCENE_ZERO_BASED` w `libraries/RCVclient/RcvParser.h`.
+  Prawdziwy RCV wysyła w nich jednak wartości ujemne (np. `PgmScene="-65"`) o nieznanym znaczeniu. Firmware traktuje je jako „brak sceny”, więc ich nie używa.
 - Nie wiadomo, czy wiadomość `/remote` zmienia coś widocznego na samym mikserze. Companion wysyła ją zawsze.

@@ -9,6 +9,7 @@ Then type commands:
 
     p 2      program = input 2          v 3      preview = input 3
     ps B     program = scene B          vs A     preview = scene A
+             (scenes: A = inputs 1+2, B = 2+3, C = 1+3, D = 1+2+3)
     pm 1     program = media 1
     cut      swap program and preview
     instant  switch to instant mode     studio   switch to studio mode
@@ -28,11 +29,18 @@ clients = []
 lock = threading.Lock()
 state = {"pgm": ("videoIn", 1), "pvw": ("videoIn", 2), "mode": "studioLeft", "live": 0, "record": 0}
 
+# Inputs visible in scenes A-G (picture in picture etc.)
+SCENE_LAYOUT = [(1, 2), (2, 3), (1, 3), (1, 2, 3), (), (), ()]
+
 SHOW_XML = (
     '<?xml version="1.0" encoding="UTF-8"?>\n'
     '<RcvShow name="Simulator" frameRate="25" switching_mode="{mode}" PgmScene="{pgm_scene}" PvwScene="{pvw_scene}" '
     'PgmOverlay="-1" PvwOverlay="-1" transition="cut" transition_time="0.5">\n'
-    '  <Scenes>\n' + "".join(f'    <Scene name="Scene {c}"/>\n' for c in "ABCDEFG") + '  </Scenes>\n'
+    '  <Scenes>\n' + "".join(
+        f'    <Scene name="Scene {c}"><VideoLayers>'
+        + "".join(f'<Layer source="videoInput" source_file="{i}" video_enabled="true"/>' for i in inputs)
+        + '</VideoLayers></Scene>\n'
+        for c, inputs in zip("ABCDEFG", SCENE_LAYOUT)) + '  </Scenes>\n'
     '</RcvShow>\n'
 )
 

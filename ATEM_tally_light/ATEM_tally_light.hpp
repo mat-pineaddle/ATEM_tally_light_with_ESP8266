@@ -56,6 +56,9 @@ bool isRcv();
 //True if connected to the selected switcher
 bool switcherConnected();
 
+//Inputs per RODECaster Video scene (automatic layout + manual selection)
+const uint8_t *rcvSceneMasks();
+
 //Print RODECaster Video program/preview state to serial
 void printRcvState();
 #endif

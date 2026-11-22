@@ -196,7 +196,8 @@ struct Settings {
     uint8_t ledBrightness;
     //Added for RODECaster Video support. Appended at the end to keep existing settings valid.
     uint8_t switcherType;
-    uint8_t rcvSceneInputs[RCV_MAX_SCENES]; //Bitmask per scene (A-G): bit n = input n+1 is part of the scene
+    uint8_t rcvSceneInputs[RCV_MAX_SCENES]; //Manual bitmask per scene (A-G): bit n = input n+1 is part of the scene
+    uint8_t rcvAutoScenes;                  //1 = also use the scene layout read from the RCV (video layers of each scene)
 };
 
 Settings settings;
@@ -261,6 +262,9 @@ void setup() {
         if (settings.rcvSceneInputs[i] > (1 << RCV_MAX_INPUTS) - 1) {
             settings.rcvSceneInputs[i] = 0;
         }
+    }
+    if (settings.rcvAutoScenes > 1) {
+        settings.rcvAutoScenes = 1; //Automatic scene mapping is on by default
     }
 
     //Initialize LED strip
@@ -448,7 +452,7 @@ void loop() {
                 }
                 tallyServer.setTallySources(RCV_MAX_INPUTS);
                 for (int i = 0; i < RCV_MAX_INPUTS; i++) {
-                    tallyServer.setTallyFlag(i, rcvSwitcher.state().inputTallyFlags(i + 1, settings.rcvSceneInputs));
+                    tallyServer.setTallyFlag(i, rcvSwitcher.state().inputTallyFlags(i + 1, rcvSceneMasks()));
                 }
             } else {
                 atemSwitcher.runLoop();
@@ -717,13 +721,40 @@ bool switcherConnected() {
     return isRcv() ? rcvSwitcher.isConnected() : atemSwitcher.isConnected();
 }
 
+//Inputs per scene: the layout read from the RCV (if enabled) plus the manually selected inputs
+const uint8_t *rcvSceneMasks() {
+    static uint8_t masks[RCV_MAX_SCENES];
+    for (int sc = 0; sc < RCV_MAX_SCENES; sc++) {
+        masks[sc] = settings.rcvSceneInputs[sc];
+        if (settings.rcvAutoScenes) {
+            masks[sc] |= rcvSwitcher.state().sceneInputs(sc + 1);
+        }
+    }
+    return masks;
+}
+
+String rcvInputList(uint8_t mask) {
+    String s;
+    for (int i = 0; i < RCV_MAX_INPUTS; i++) {
+        if (mask & (1 << i)) {
+            if (s.length()) s += ", ";
+            s += String(i + 1);
+        }
+    }
+    return s.length() ? s : String("-");
+}
+
 String rcvBusToString(RcvBus bus) {
     switch (bus.type) {
         case RCV_SRC_INPUT:
             return "Input " + String(bus.id);
         case RCV_SRC_SCENE: {
             String s = "Scene " + String((char)('A' + bus.id - 1));
-            uint8_t mask = bus.id <= RCV_MAX_SCENES ? settings.rcvSceneInputs[bus.id - 1] : 0;
+            const char *name = rcvSwitcher.state().sceneName(bus.id);
+            if (name[0]) {
+                s += " \"" + String(name) + "\"";
+            }
+            uint8_t mask = bus.id <= RCV_MAX_SCENES ? rcvSceneMasks()[bus.id - 1] : 0;
             if (mask) {
                 s += " (inputs";
                 for (int i = 0; i < RCV_MAX_INPUTS; i++) {
@@ -757,7 +788,7 @@ int getTallyState(uint16_t tallyNo) {
         if (tallyNo >= RCV_MAX_INPUTS) { //out of range
             return TALLY_FLAG_OFF;
         }
-        tallyFlag = rcvSwitcher.state().inputTallyFlags(tallyNo + 1, settings.rcvSceneInputs);
+        tallyFlag = rcvSwitcher.state().inputTallyFlags(tallyNo + 1, rcvSceneMasks());
     } else {
         if(tallyNo >= atemSwitcher.getTallyByIndexSources()) { //out of range
             return TALLY_FLAG_OFF;
@@ -994,13 +1025,24 @@ void handleRoot() {
     html += "\"required/></tr>";
 
     //RODECaster Video scene to input mapping (picture in picture etc.)
-    html += "<tr><td><br></td></tr><tr><td style=\"vertical-align:top\">RODECaster Video scenes:<br><small>Inputs shown in each scene.<br>They light up when the scene<br>is on program or preview.</small></td><td colspan=\"2\"><table cellpadding=\"2\"><tr><td></td>";
+    RcvParser &rcv = rcvSwitcher.state();
+    html += "<tr><td><br></td></tr><tr><td>Scenes from RODECaster:</td><td><input type=\"checkbox\"name=\"rcvAuto\"value=\"1\"";
+    if (settings.rcvAutoScenes)
+        html += "checked";
+    html += "/> Detect inputs in scenes automatically</td></tr>";
+    html += "<tr><td style=\"vertical-align:top\">RODECaster Video scenes:<br><small>Inputs in a scene light up when<br>the scene is on program or preview.<br>Tick inputs to add them manually<br>(e.g. if detection is off).</small></td><td colspan=\"2\"><table cellpadding=\"2\"><tr><td></td><td>Detected</td>";
     for (int i = 0; i < RCV_MAX_INPUTS; i++) {
         html += "<td>In " + String(i + 1) + "</td>";
     }
     html += "</tr>";
     for (int sc = 0; sc < RCV_MAX_SCENES; sc++) {
-        html += "<tr><td>Scene " + String((char)('A' + sc)) + "</td>";
+        html += "<tr><td>Scene " + String((char)('A' + sc));
+        if (rcv.sceneName(sc + 1)[0]) {
+            html += " <small>(" + String(rcv.sceneName(sc + 1)) + ")</small>";
+        }
+        html += "</td><td>";
+        html += rcv.isSceneLayoutKnown() ? rcvInputList(rcv.sceneInputs(sc + 1)) : String("?");
+        html += "</td>";
         for (int i = 0; i < RCV_MAX_INPUTS; i++) {
             html += "<td style=\"text-align:center\"><input type=\"checkbox\"name=\"sc" + String(sc) + "i" + String(i) + "\"value=\"1\"";
             if (settings.rcvSceneInputs[sc] & (1 << i))
@@ -1031,6 +1073,7 @@ void handleSave() {
             for (int sc = 0; sc < RCV_MAX_SCENES; sc++) {
                 settings.rcvSceneInputs[sc] = 0;
             }
+            settings.rcvAutoScenes = 0;
         }
 #endif
         for (uint8_t i = 0; i < server.args(); i++) {
@@ -1094,6 +1137,8 @@ void handleSave() {
                 settings.switcherIP[3] = val.toInt();
             } else if (var == "swType") {
                 settings.switcherType = val.toInt() == SWITCHER_RCV ? SWITCHER_RCV : SWITCHER_ATEM;
+            } else if (var == "rcvAuto") {
+                settings.rcvAutoScenes = val == "1" ? 1 : 0;
             } else if (var.length() == 5 && var.startsWith("sc") && var[3] == 'i') {
                 //Scene mapping checkbox: "sc<scene>i<input>"
                 int sc = var[2] - '0';
