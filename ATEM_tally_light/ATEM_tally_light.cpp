@@ -314,6 +314,12 @@ void setup() {
     WiFi.hostname(settings.tallyName);
 #endif
     WiFi.setAutoReconnect(true);
+    //Keep the radio awake: modem sleep adds latency to incoming data and makes weak connections drop.
+#ifdef ESP32
+    WiFi.setSleep(false);
+#else
+    WiFi.setSleepMode(WIFI_NONE_SLEEP);
+#endif
     WiFi.begin();
 
     Serial.println("------------------------");
@@ -448,7 +454,16 @@ void loop() {
 
                 //Tally numbers 1-6 are RODECaster Video inputs 1-6. Scenes light up all inputs mapped to them.
                 if (rcvSwitcher.state().consumeChanged()) {
-                    printRcvState();
+                    //Only log when something visible changed (the RCV sends many button LED updates)
+                    static uint32_t lastRcvSignature = 0xFFFFFFFF;
+                    RcvParser &rcv = rcvSwitcher.state();
+                    uint32_t signature = (uint32_t)rcv.program().type << 24 | (uint32_t)rcv.program().id << 16 |
+                                         (uint32_t)rcv.preview().type << 8 | (uint32_t)rcv.preview().id << 2 |
+                                         (rcv.isStreaming() ? 2 : 0) | (rcv.isRecording() ? 1 : 0);
+                    if (signature != lastRcvSignature) {
+                        lastRcvSignature = signature;
+                        printRcvState();
+                    }
                 }
                 tallyServer.setTallySources(RCV_MAX_INPUTS);
                 for (int i = 0; i < RCV_MAX_INPUTS; i++) {
@@ -834,8 +849,29 @@ int getLedColor(int tallyMode, int tallyNo) {
 }
 
 //Serve setup web page to client, by sending HTML with the correct variables
+//Send the page in small chunks instead of building it all in RAM (the ESP8266 has very little heap,
+//and running out of it also starves the WiFi stack).
+bool htmlHeaderSent = false;
+void sendHtmlChunk(String &html, bool force = false) {
+    if (!force && html.length() < 1200) {
+        return;
+    }
+    if (!htmlHeaderSent) {
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "text/html", "");
+        htmlHeaderSent = true;
+    }
+    if (html.length() > 0) {
+        server.sendContent(html);
+        html = "";
+    }
+}
+
 void handleRoot() {
-    String html = "<!DOCTYPE html><html><head><meta charset=\"ASCII\"><meta name=\"viewport\"content=\"width=device-width,initial-scale=1.0\"><title>Tally Light setup</title></head><script>function switchIpField(e){console.log(\"switch\");console.log(e);var target=e.srcElement||e.target;var maxLength=parseInt(target.attributes[\"maxlength\"].value,10);var myLength=target.value.length;if(myLength>=maxLength){var next=target.nextElementSibling;if(next!=null){if(next.className.includes(\"IP\")){next.focus();}}}else if(myLength==0){var previous=target.previousElementSibling;if(previous!=null){if(previous.className.includes(\"IP\")){previous.focus();}}}}function ipFieldFocus(e){console.log(\"focus\");console.log(e);var target=e.srcElement||e.target;target.select();}function load(){var containers=document.getElementsByClassName(\"IP\");for(var i=0;i<containers.length;i++){var container=containers[i];container.oninput=switchIpField;container.onfocus=ipFieldFocus;}containers=document.getElementsByClassName(\"tIP\");for(var i=0;i<containers.length;i++){var container=containers[i];container.oninput=switchIpField;container.onfocus=ipFieldFocus;}toggleStaticIPFields();}function toggleStaticIPFields(){var enabled=document.getElementById(\"staticIP\").checked;document.getElementById(\"staticIPHidden\").disabled=enabled;var staticIpFields=document.getElementsByClassName('tIP');for(var i=0;i<staticIpFields.length;i++){staticIpFields[i].disabled=!enabled;}}</script><style>a{color:#0F79E0}</style><body style=\"font-family:Verdana;white-space:nowrap;\"onload=\"load()\"><table cellpadding=\"2\"style=\"width:100%\"><tr bgcolor=\"#777777\"style=\"color:#ffffff;font-size:.8em;\"><td colspan=\"3\"><h1>&nbsp;" +
+    htmlHeaderSent = false;
+    String html;
+    html.reserve(1600);
+    html += "<!DOCTYPE html><html><head><meta charset=\"ASCII\"><meta name=\"viewport\"content=\"width=device-width,initial-scale=1.0\"><title>Tally Light setup</title></head><script>function switchIpField(e){console.log(\"switch\");console.log(e);var target=e.srcElement||e.target;var maxLength=parseInt(target.attributes[\"maxlength\"].value,10);var myLength=target.value.length;if(myLength>=maxLength){var next=target.nextElementSibling;if(next!=null){if(next.className.includes(\"IP\")){next.focus();}}}else if(myLength==0){var previous=target.previousElementSibling;if(previous!=null){if(previous.className.includes(\"IP\")){previous.focus();}}}}function ipFieldFocus(e){console.log(\"focus\");console.log(e);var target=e.srcElement||e.target;target.select();}function load(){var containers=document.getElementsByClassName(\"IP\");for(var i=0;i<containers.length;i++){var container=containers[i];container.oninput=switchIpField;container.onfocus=ipFieldFocus;}containers=document.getElementsByClassName(\"tIP\");for(var i=0;i<containers.length;i++){var container=containers[i];container.oninput=switchIpField;container.onfocus=ipFieldFocus;}toggleStaticIPFields();}function toggleStaticIPFields(){var enabled=document.getElementById(\"staticIP\").checked;document.getElementById(\"staticIPHidden\").disabled=enabled;var staticIpFields=document.getElementsByClassName('tIP');for(var i=0;i<staticIpFields.length;i++){staticIpFields[i].disabled=!enabled;}}</script><style>a{color:#0F79E0}</style><body style=\"font-family:Verdana;white-space:nowrap;\"onload=\"load()\"><table cellpadding=\"2\"style=\"width:100%\"><tr bgcolor=\"#777777\"style=\"color:#ffffff;font-size:.8em;\"><td colspan=\"3\"><h1>&nbsp;" +
     (String)DISPLAY_NAME +
     " setup</h1><h2>&nbsp;Status:</h2></td></tr><tr><td><br></td><td></td><td style=\"width:100%;\"></td></tr><tr><td>Connection Status:</td><td colspan=\"2\">";
     switch (WiFi.status()) {
@@ -882,7 +918,9 @@ void handleRoot() {
     html += WiFi.subnetMask().toString();
     html += "</td></tr><tr><td>Gateway: </td><td colspan=\"2\">";
     html += WiFi.gatewayIP().toString();
-    html += "</td></tr><tr><td><br></td></tr>";
+    html += "</td></tr><tr><td>Free memory:</td><td colspan=\"2\">";
+    html += String(ESP.getFreeHeap());
+    html += " bytes</td></tr><tr><td><br></td></tr>";
 #ifndef TALLY_TEST_SERVER
     html += "<tr><td>Switcher type:</td><td colspan=\"2\">";
     html += isRcv() ? "RODECaster Video" : "ATEM / Tally server";
@@ -911,6 +949,7 @@ void handleRoot() {
     html += (String)settings.switcherIP[0] + '.' + settings.switcherIP[1] + '.' + settings.switcherIP[2] + '.' + settings.switcherIP[3];
     html += "</td></tr><tr><td><br></td></tr>";
 #endif
+    sendHtmlChunk(html, true);
     html += "<tr bgcolor=\"#777777\"style=\"color:#ffffff;font-size:.8em;\"><td colspan=\"3\"><h2>&nbsp;Settings:</h2></td></tr><tr><td><br></td></tr><form action=\"/save\"method=\"post\"><tr><td>Tally Light name: </td><td><input type=\"text\"size=\"30\"maxlength=\"30\"name=\"tName\"value=\"";
 #ifdef ESP32
     html += WiFi.getHostname();
@@ -974,7 +1013,9 @@ void handleRoot() {
     html += "\"required/></td></tr><tr><td>Network password: </td><td><input type=\"password\"size=\"30\"maxlength=\"30\"name=\"pwd\"pattern=\"^$|.{8,32}\"value=\"";
     if (WiFi.isConnected()) //As a minimum security meassure, to only send the wifi password if it's currently connected to the given network.
         html += WiFi.psk();
-    html += "\"/></td></tr><tr><td><br></td></tr><tr><td>Use static IP: </td><td><input type=\"hidden\"id=\"staticIPHidden\"name=\"staticIP\"value=\"false\"/><input id=\"staticIP\"type=\"checkbox\"name=\"staticIP\"value=\"true\"onchange=\"toggleStaticIPFields()\"";
+    html += "\"/></td></tr>";
+    sendHtmlChunk(html);
+    html += "<tr><td><br></td></tr><tr><td>Use static IP: </td><td><input type=\"hidden\"id=\"staticIPHidden\"name=\"staticIP\"value=\"false\"/><input id=\"staticIP\"type=\"checkbox\"name=\"staticIP\"value=\"true\"onchange=\"toggleStaticIPFields()\"";
     if (settings.staticIP)
         html += "checked";
     html += "/></td></tr><tr><td>" +
@@ -1005,6 +1046,7 @@ void handleRoot() {
     html += settings.tallyGateway[3];
     html += "\"required/></td></tr>";
 #ifndef TALLY_TEST_SERVER
+    sendHtmlChunk(html);
     html += "<tr><td><br></td></tr><tr><td>Switcher type: </td><td><select name=\"swType\"><option value=\"";
     html += (String) SWITCHER_ATEM + "\"";
     if (settings.switcherType == SWITCHER_ATEM)
@@ -1026,6 +1068,7 @@ void handleRoot() {
 
     //RODECaster Video scene to input mapping (picture in picture etc.)
     RcvParser &rcv = rcvSwitcher.state();
+    sendHtmlChunk(html);
     html += "<tr><td><br></td></tr><tr><td>Scenes from RODECaster:</td><td><input type=\"checkbox\"name=\"rcvAuto\"value=\"1\"";
     if (settings.rcvAutoScenes)
         html += "checked";
@@ -1050,11 +1093,13 @@ void handleRoot() {
             html += "/></td>";
         }
         html += "</tr>";
+        sendHtmlChunk(html);
     }
     html += "</table></td></tr>";
 #endif
     html += "<tr><td><br></td></tr><tr><td/><td style=\"float: right;\"><input type=\"submit\"value=\"Save Changes\"/></td></tr></form><tr bgcolor=\"#cccccc\"style=\"font-size: .8em;\"><td colspan=\"3\"><p>&nbsp;&copy; 2020-2022 <a href=\"https://aronhetlam.github.io/\">Aron N. Het Lam</a></p><p>&nbsp;Based on ATEM libraries for Arduino by <a href=\"https://www.skaarhoj.com/\">SKAARHOJ</a></p></td></tr></table></body></html>";
-    server.send(200, "text/html", html);
+    sendHtmlChunk(html, true);
+    server.sendContent(""); //End of chunked response
 }
 
 //Save new settings from client in EEPROM and restart the ESP8266 module

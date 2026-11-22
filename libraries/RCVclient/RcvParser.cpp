@@ -329,7 +329,9 @@ void RcvParser::_dispatch(const char *address, const OscArg *args, uint8_t argc)
         if (strcmp(end, "/colour") != 0) return;
         if (n >= RCV_FIRST_INPUT_BUTTON && n < RCV_FIRST_INPUT_BUTTON + RCV_MAX_INPUTS) {
             _inputButtonColour[n - RCV_FIRST_INPUT_BUTTON] = (uint8_t)_argInt(args[0]);
-            _changed = true;
+            if (!_pgmKnown || !_pvwKnown) {
+                _changed = true; //Only used as a startup hint
+            }
         }
         return;
     }
