@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tally Panel</title>
+<!--
+  Tally panel: finds tally lights on the LAN and shows their status.
+  Plain HTML, no server needed - open the file in a browser.
+
+  How it works: on "Scan" it requests http://<prefix>.<n>/ for every address in the range,
+  keeps the ones that answer with the "Tally Light setup" page and parses the status table.
+  "Refresh" only re-reads the tallies that were already found. Nothing polls automatically.
+
+  Requires firmware that sends "Access-Control-Allow-Origin: *" on "/" (otherwise the browser
+  does not let this page read the response).
+-->
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --text: #1d2026; --muted: #6b7280; --border: #dde1e6;
+    --accent: #0f79e0; --ok: #1f9d55; --warn: #d97706; --err: #dc2626; --off: #9ca3af;
+    --pgm: #dc2626; --pvw: #16a34a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14161a; --card: #1e2127; --text: #e6e8eb; --muted: #9aa1ab; --border: #2e333b;
+      --accent: #4ea1f3; --ok: #34c37a; --warn: #f0a030; --err: #f05252; --off: #6b7280;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Verdana, sans-serif; }
+  header { padding: 16px; border-bottom: 1px solid var(--border); background: var(--card); }
+  h1 { margin: 0 0 12px; font-size: 18px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .controls label { color: var(--muted); font-size: 12px; }
+  input { font: inherit; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
+          background: var(--bg); color: var(--text); }
+  input.prefix { width: 130px; } input.num { width: 64px; } input.addr { width: 170px; }
+  button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border);
+           background: var(--card); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .sep { width: 1px; height: 24px; background: var(--border); margin: 0 4px; }
+  .progress { margin-top: 10px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+  .status-line { margin-top: 6px; color: var(--muted); font-size: 12px; min-height: 1.4em; }
+  main { padding: 16px; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+  .empty { grid-column: 1 / -1; color: var(--muted); text-align: center; padding: 40px 0; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+          border-left: 4px solid var(--off); }
+  .card.ok { border-left-color: var(--ok); } .card.warn { border-left-color: var(--warn); }
+  .card.err { border-left-color: var(--err); } .card.gone { opacity: .55; }
+  .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .name { font-weight: 600; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .no { font-size: 22px; font-weight: 700; color: var(--muted); }
+  .pill { display: inline-block; margin: 6px 0 10px; padding: 2px 8px; border-radius: 10px; font-size: 12px;
+          color: #fff; background: var(--off); }
+  .ok .pill { background: var(--ok); } .warn .pill { background: var(--warn); } .err .pill { background: var(--err); }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; }
+  dt { color: var(--muted); } dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag { font-weight: 600; } .tag.pgm { color: var(--pgm); } .tag.pvw { color: var(--pvw); }
+  .card-foot { margin-top: 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .card-foot a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .card-foot small { color: var(--muted); }
+  .x { border: 0; background: none; color: var(--muted); padding: 0 4px; font-size: 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tally Panel</h1>
+  <div class="controls">
+    <label for="prefix">Subnet</label>
+    <input id="prefix" class="prefix" placeholder="192.168.1" spellcheck="false">
+    <label for="from">from</label><input id="from" class="num" type="number" min="1" max="254" value="1">
+    <label for="to">to</label><input id="to" class="num" type="number" min="1" max="254" value="254">
+    <button id="scan" class="primary">Scan</button>
+    <button id="stop" disabled>Stop</button>
+    <div class="sep"></div>
+    <button id="refresh">Refresh</button>
+    <div class="sep"></div>
+    <input id="addr" class="addr" placeholder="Add address (IP or host:port)" spellcheck="false">
+    <button id="add">Add</button>
+  </div>
+  <div class="progress"><div id="bar"></div></div>
+  <div class="status-line" id="msg"></div>
+</header>
+<main id="list"></main>
+
+<script>
+const STORE_KEY = 'tallyPanel.v1';
+const SCAN_PARALLEL = 32;
+const SCAN_CONNECT_MS = 1500;   // time for a response to start during a scan (empty IPs hang)
+const REFRESH_CONNECT_MS = 4000;
+const BODY_MS = 8000;           // the ESP sends the page in chunks, give it time
+
+const $ = id => document.getElementById(id);
+let devices = new Map();        // addr -> {addr, info|null, checked}
+let stopRequested = false;
+let busy = false;
+
+// ---------- persistence (per-browser convenience only) ----------
+function load() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+    $('prefix').value = s.prefix || '';
+    if (s.from) $('from').value = s.from;
+    if (s.to) $('to').value = s.to;
+    (s.devices || []).forEach(a => devices.set(a, { addr: a, info: null, checked: null }));
+  } catch (e) {}
+}
+function save() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({
+      prefix: $('prefix').value.trim(), from: $('from').value, to: $('to').value,
+      devices: [...devices.keys()],
+    }));
+  } catch (e) {}
+}
+
+// ---------- fetching and parsing ----------
+async function probe(addr, connectMs) {
+  const ctl = new AbortController();
+  let timer = setTimeout(() => ctl.abort(), connectMs);
+  try {
+    const res = await fetch('http://' + addr + '/', { signal: ctl.signal, cache: 'no-store' });
+    clearTimeout(timer);
+    timer = setTimeout(() => ctl.abort(), BODY_MS);
+    const text = await res.text();
+    return parseTallyPage(text);
+  } catch (e) {
+    return null; // no device, timeout, or a device that does not allow reading (not a tally)
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseTallyPage(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const m = /^(Tally Light|Tally Test server) setup$/.exec(doc.title.trim());
+  if (!m) return null;
+  const displayName = m[1];
+
+  // Status table: <tr><td>Label:</td><td>Value</td></tr>
+  const rows = {};
+  doc.querySelectorAll('tr').forEach(tr => {
+    const tds = tr.querySelectorAll(':scope > td');
+    if (tds.length < 2) return;
+    const label = tds[0].textContent.trim();
+    if (!label.endsWith(':')) return;
+    const key = label.slice(0, -1).trim();
+    if (!(key in rows)) rows[key] = tds[1].textContent.replace(/\s+/g, ' ').trim();
+  });
+  const val = name => doc.querySelector(`input[name="${name}"]`)?.getAttribute('value') ?? '';
+
+  return {
+    testServer: displayName === 'Tally Test server',
+    name: val('tName'),
+    number: val('tNo'),
+    ip: rows[displayName + ' IP'] || '',
+    ssid: rows['Network name (SSID)'] || '',
+    rssi: parseInt(rows['Signal strength'], 10),
+    freeHeap: parseInt(rows['Free memory'], 10),
+    switcherType: rows['Switcher type'] || '',
+    switcherStatus: rows['Switcher status'] || '',
+    switcherIP: rows['Switcher IP'] || '',
+    program: rows['Program'] || '',
+    preview: rows['Preview'] || '',
+    streamRec: rows['Streaming / recording'] || '',
+  };
+}
+
+function classify(info) {
+  if (!info) return ['err gone', 'No response'];
+  if (info.testServer) return ['ok', 'Test server'];
+  const s = info.switcherStatus;
+  if (s === 'Connected') return ['ok', 'Connected to switcher'];
+  if (s.startsWith('Connection rejected')) return ['err', 'Rejected by switcher'];
+  if (s.includes('Waiting for WiFi')) return ['err', 'No WiFi'];
+  return ['warn', s || 'Unknown'];
+}
+
+// ---------- rendering ----------
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function ipKey(addr) {
+  const p = addr.split(':')[0].split('.').map(Number);
+  return p.length === 4 && p.every(n => !isNaN(n)) ? p.reduce((a, n) => a * 256 + n, 0) : Infinity;
+}
+function sortKey(d) {
+  const n = parseInt(d.info?.number, 10);
+  return [isNaN(n) ? 1e9 : n, ipKey(d.addr)];
+}
+
+function render() {
+  const list = [...devices.values()].sort((a, b) => {
+    const [a1, a2] = sortKey(a), [b1, b2] = sortKey(b);
+    return a1 - b1 || a2 - b2;
+  });
+  if (!list.length) {
+    $('list').innerHTML = '<div class="empty">No tallies yet. Enter the subnet and press Scan.</div>';
+    return;
+  }
+  $('list').innerHTML = list.map(d => {
+    const i = d.info;
+    const [cls, label] = d.checked ? classify(i) : ['', 'Not checked yet'];
+    const rows = [];
+    if (i) {
+      if (i.switcherType) rows.push(['Switcher', esc(i.switcherType) + (i.switcherIP ? ' · ' + esc(i.switcherIP) : '')]);
+      if (i.program) rows.push(['Program', `<span class="tag pgm">${esc(i.program)}</span>`]);
+      if (i.preview) rows.push(['Preview', `<span class="tag pvw">${esc(i.preview)}</span>`]);
+      if (i.streamRec) rows.push(['Output', esc(i.streamRec)]);
+      rows.push(['WiFi', esc(i.ssid) + (isNaN(i.rssi) ? '' : ` · ${i.rssi} dBm`)]);
+      if (!isNaN(i.freeHeap)) rows.push(['Free memory', `${i.freeHeap} B`]);
+    }
+    return `<div class="card ${cls}">
+      <div class="card-head">
+        <span class="name" title="${esc(i?.name || d.addr)}">${esc(i?.name || d.addr)}</span>
+        <span class="no">${i?.number ? '#' + esc(i.number) : ''}</span>
+      </div>
+      <span class="pill">${esc(label)}</span>
+      <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}
+        <dt>Address</dt><dd>${esc(d.addr)}</dd></dl>
+      <div class="card-foot">
+        <a href="http://${esc(d.addr)}/" target="_blank" rel="noopener">Configure ↗</a>
+        <small>${d.checked ? 'checked ' + d.checked.toLocaleTimeString() : ''}</small>
+        <button class="x" title="Remove from list" data-remove="${esc(d.addr)}">×</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function setBusy(b) {
+  busy = b;
+  $('scan').disabled = b; $('refresh').disabled = b; $('add').disabled = b; $('stop').disabled = !b;
+}
+function progress(done, total, text) {
+  $('bar').style.width = total ? (100 * done / total) + '%' : '0';
+  $('msg').textContent = text;
+}
+
+async function runPool(items, worker, onDone) {
+  let next = 0, done = 0;
+  const lanes = Array.from({ length: Math.min(SCAN_PARALLEL, items.length) }, async () => {
+    while (next < items.length && !stopRequested) {
+      const item = items[next++];
+      await worker(item);
+      onDone(++done);
+    }
+  });
+  await Promise.all(lanes);
+}
+
+// ---------- actions ----------
+async function scan() {
+  const prefix = $('prefix').value.trim().replace(/\.$/, '');
+  if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(prefix)) {
+    $('msg').textContent = 'Enter the first three parts of the address, e.g. 192.168.1';
+    $('prefix').focus();
+    return;
+  }
+  const from = Math.max(1, Math.min(254, +$('from').value || 1));
+  const to = Math.max(from, Math.min(254, +$('to').value || 254));
+  save();
+
+  const addrs = [];
+  for (let n = from; n <= to; n++) addrs.push(`${prefix}.${n}`);
+  let found = 0;
+  stopRequested = false;
+  setBusy(true);
+  await runPool(addrs, async addr => {
+    const info = await probe(addr, SCAN_CONNECT_MS);
+    if (info) {
+      found++;
+      devices.set(addr, { addr, info, checked: new Date() });
+      render();
+    } else if (devices.has(addr)) {
+      devices.get(addr).info = null;
+      devices.get(addr).checked = new Date();
+    }
+  }, done => progress(done, addrs.length, `Scanning ${prefix}.${from}–${to}: ${done}/${addrs.length}, found ${found}`));
+  setBusy(false);
+  save();
+  render();
+  progress(0, 0, (stopRequested ? 'Scan stopped. ' : 'Scan finished. ') + `Found ${found} ${found === 1 ? 'tally' : 'tallies'}.`);
+}
+
+async function refresh() {
+  const list = [...devices.keys()];
+  if (!list.length) { $('msg').textContent = 'Nothing to refresh, run a scan first.'; return; }
+  stopRequested = false;
+  setBusy(true);
+  let ok = 0;
+  await runPool(list, async addr => {
+    const info = await probe(addr, REFRESH_CONNECT_MS);
+    if (info) ok++;
+    const d = devices.get(addr);
+    if (d) { d.info = info; d.checked = new Date(); }
+  }, done => progress(done, list.length, `Refreshing ${done}/${list.length}`));
+  setBusy(false);
+  render();
+  progress(0, 0, `Refreshed: ${ok}/${list.length} responded.`);
+}
+
+async function addAddress() {
+  const addr = $('addr').value.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  if (!addr) return;
+  setBusy(true);
+  $('msg').textContent = `Checking ${addr}…`;
+  const info = await probe(addr, REFRESH_CONNECT_MS);
+  setBusy(false);
+  if (!info) {
+    $('msg').textContent = `${addr} did not answer as a tally (or its firmware does not allow reading the page).`;
+    return;
+  }
+  devices.set(addr, { addr, info, checked: new Date() });
+  $('addr').value = '';
+  save();
+  render();
+  $('msg').textContent = `Added ${info.name || addr}.`;
+}
+
+$('scan').onclick = scan;
+$('refresh').onclick = refresh;
+$('stop').onclick = () => { stopRequested = true; };
+$('add').onclick = addAddress;
+$('addr').onkeydown = e => { if (e.key === 'Enter' && !busy) addAddress(); };
+$('prefix').onkeydown = e => { if (e.key === 'Enter' && !busy) scan(); };
+$('list').onclick = e => {
+  const a = e.target.dataset?.remove;
+  if (a) { devices.delete(a); save(); render(); }
+};
+
+load();
+render();
+if (devices.size) $('msg').textContent = 'Saved list loaded. Press Refresh to check the status.';
+</script>
+</body>
+</html>

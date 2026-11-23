@@ -828,6 +828,9 @@ void sendHtmlChunk(String &html, bool force = false) {
     }
     if (!htmlHeaderSent) {
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        //Allow the LAN scan panel (tools/tally_panel.html) to read this page from another origin
+        server.sendHeader("Access-Control-Allow-Origin", "*");
+        server.sendHeader("Access-Control-Allow-Private-Network", "true");
         server.send(200, "text/html", "");
         htmlHeaderSent = true;
     }
