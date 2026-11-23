@@ -76,6 +76,15 @@ int getLedColor(int tallyMode, int tallyNo);
 //Serve setup web page to client, by sending HTML with the correct variables
 void handleRoot();
 
+//Serve the LAN tally panel listing all tallies on the network
+void handleTallies();
+
+//Serve the stylesheet of the settings pages
+void handleStyle();
+
+//Small page in the style of the settings page, for messages
+String simplePage(const String &message);
+
 //Save new settings from client in EEPROM and restart the ESP8266 module
 void handleSave();
 

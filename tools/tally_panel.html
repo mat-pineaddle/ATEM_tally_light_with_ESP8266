@@ -6,7 +6,8 @@
 <title>Tally Panel</title>
 <!--
   Tally panel: finds tally lights on the LAN and shows their status.
-  Plain HTML, no server needed - open the file in a browser.
+  Plain HTML, no server needed - open the file in a browser, or open http://<any tally>/tallies
+  (the firmware embeds this file at build time via pio_scripts/embed_panel.py).
 
   How it works: on "Scan" it requests http://<prefix>.<n>/ for every address in the range,
   keeps the ones that answer with the "Tally Light setup" page and parses the status table.
@@ -32,6 +33,7 @@
          font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Verdana, sans-serif; }
   header { padding: 16px; border-bottom: 1px solid var(--border); background: var(--card); }
   h1 { margin: 0 0 12px; font-size: 18px; }
+  .home { margin-left: 8px; font-size: 13px; font-weight: 400; color: var(--accent); text-decoration: none; }
   .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .controls label { color: var(--muted); font-size: 12px; }
   input { font: inherit; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
@@ -64,11 +66,26 @@
   .card-foot a { color: var(--accent); text-decoration: none; font-weight: 600; }
   .card-foot small { color: var(--muted); }
   .x { border: 0; background: none; color: var(--muted); padding: 0 4px; font-size: 16px; }
+  .seg { display: inline-flex; margin-left: auto; }
+  .seg button { border-radius: 0; } .seg button:first-child { border-radius: 6px 0 0 6px; }
+  .seg button:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
+  .seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  main.list { display: block; }
+  .table-wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--border); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  tr:last-child td { border-bottom: 0; }
+  tr.gone td { opacity: .55; }
+  td.num { font-weight: 700; font-size: 15px; }
+  td a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--off); }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.err { background: var(--err); }
 </style>
 </head>
 <body>
 <header>
-  <h1>Tally Panel</h1>
+  <h1>Tally Panel <a id="home" class="home" href="/" hidden>this tally's settings</a></h1>
   <div class="controls">
     <label for="prefix">Subnet</label>
     <input id="prefix" class="prefix" placeholder="192.168.1" spellcheck="false">
@@ -81,6 +98,9 @@
     <div class="sep"></div>
     <input id="addr" class="addr" placeholder="Add address (IP or host:port)" spellcheck="false">
     <button id="add">Add</button>
+    <div class="seg" role="group" aria-label="View">
+      <button id="viewTiles" data-view="tiles">Tiles</button><button id="viewList" data-view="list">List</button>
+    </div>
   </div>
   <div class="progress"><div id="bar"></div></div>
   <div class="status-line" id="msg"></div>
@@ -98,6 +118,7 @@ const $ = id => document.getElementById(id);
 let devices = new Map();        // addr -> {addr, info|null, checked}
 let stopRequested = false;
 let busy = false;
+let view = 'tiles';             // 'tiles' or 'list'
 
 // ---------- persistence (per-browser convenience only) ----------
 function load() {
@@ -106,13 +127,14 @@ function load() {
     $('prefix').value = s.prefix || '';
     if (s.from) $('from').value = s.from;
     if (s.to) $('to').value = s.to;
+    if (s.view === 'list') view = 'list';
     (s.devices || []).forEach(a => devices.set(a, { addr: a, info: null, checked: null }));
   } catch (e) {}
 }
 function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      prefix: $('prefix').value.trim(), from: $('from').value, to: $('to').value,
+      prefix: $('prefix').value.trim(), from: $('from').value, to: $('to').value, view,
       devices: [...devices.keys()],
     }));
   } catch (e) {}
@@ -198,10 +220,14 @@ function render() {
     const [a1, a2] = sortKey(a), [b1, b2] = sortKey(b);
     return a1 - b1 || a2 - b2;
   });
+  $('list').className = view === 'list' ? 'list' : '';
+  $('viewTiles').classList.toggle('on', view !== 'list');
+  $('viewList').classList.toggle('on', view === 'list');
   if (!list.length) {
     $('list').innerHTML = '<div class="empty">No tallies yet. Enter the subnet and press Scan.</div>';
     return;
   }
+  if (view === 'list') { renderList(list); return; }
   $('list').innerHTML = list.map(d => {
     const i = d.info;
     const [cls, label] = d.checked ? classify(i) : ['', 'Not checked yet'];
@@ -229,6 +255,37 @@ function render() {
       </div>
     </div>`;
   }).join('');
+}
+
+function renderList(list) {
+  const rows = list.map(d => {
+    const i = d.info;
+    const [cls, label] = d.checked ? classify(i) : ['', 'Not checked yet'];
+    let onAir = '';
+    if (i?.program) onAir += `<span class="tag pgm">${esc(i.program)}</span>`;
+    if (i?.preview) onAir += (onAir ? ' / ' : '') + `<span class="tag pvw">${esc(i.preview)}</span>`;
+    return `<tr class="${cls.includes('gone') ? 'gone' : ''}">
+      <td class="num">${i?.number ? esc(i.number) : ''}</td>
+      <td><a href="http://${esc(d.addr)}/" target="_blank" rel="noopener" title="Open settings">${esc(i?.name || d.addr)} ↗</a></td>
+      <td><span class="dot ${cls}"></span>${esc(label)}</td>
+      <td>${onAir}</td>
+      <td>${i ? esc(i.switcherType) : ''}</td>
+      <td>${i && !isNaN(i.rssi) ? i.rssi + ' dBm' : ''}</td>
+      <td>${esc(d.addr)}</td>
+      <td>${d.checked ? d.checked.toLocaleTimeString() : ''}</td>
+      <td><button class="x" title="Remove from list" data-remove="${esc(d.addr)}">×</button></td>
+    </tr>`;
+  }).join('');
+  $('list').innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>#</th><th>Name (settings)</th><th>Status</th><th>Program / Preview</th><th>Switcher</th>
+      <th>Signal</th><th>Address</th><th>Checked</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+function setView(v) {
+  view = v;
+  save();
+  render();
 }
 
 function setBusy(b) {
@@ -325,6 +382,8 @@ $('scan').onclick = scan;
 $('refresh').onclick = refresh;
 $('stop').onclick = () => { stopRequested = true; };
 $('add').onclick = addAddress;
+$('viewTiles').onclick = () => setView('tiles');
+$('viewList').onclick = () => setView('list');
 $('addr').onkeydown = e => { if (e.key === 'Enter' && !busy) addAddress(); };
 $('prefix').onkeydown = e => { if (e.key === 'Enter' && !busy) scan(); };
 $('list').onclick = e => {
@@ -333,6 +392,11 @@ $('list').onclick = e => {
 };
 
 load();
+// Served by a tally (http://<tally>/tallies): link back to its settings, and default to its subnet
+const servedByTally = location.protocol === 'http:' && location.pathname === '/tallies';
+if (servedByTally) $('home').hidden = false;
+const ownIp = /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/.exec(location.hostname);
+if (!$('prefix').value && ownIp && ownIp[1] !== '127.0.0') $('prefix').value = ownIp[1];
 render();
 if (devices.size) $('msg').textContent = 'Saved list loaded. Press Refresh to check the status.';
 </script>

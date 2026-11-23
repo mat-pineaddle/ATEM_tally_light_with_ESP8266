@@ -56,6 +56,7 @@
 #include <TallyServer.h>
 #include <RCVclient.h>
 #include <FastLED.h>
+#include "web_assets.h"
 
 #ifdef ESP32
 //Define LED1 color pins
@@ -341,6 +342,8 @@ void setup() {
     // Initialize and begin HTTP server for handeling the web interface
     server.on("/", handleRoot);
     server.on("/save", handleSave);
+    server.on("/tallies", handleTallies);
+    server.on("/style.css", handleStyle);
     server.onNotFound(handleNotFound);
     server.begin();
 
@@ -844,9 +847,9 @@ void handleRoot() {
     htmlHeaderSent = false;
     String html;
     html.reserve(1600);
-    html += "<!DOCTYPE html><html><head><meta charset=\"ASCII\"><meta name=\"viewport\"content=\"width=device-width,initial-scale=1.0\"><title>Tally Light setup</title></head><script>function switchIpField(e){console.log(\"switch\");console.log(e);var target=e.srcElement||e.target;var maxLength=parseInt(target.attributes[\"maxlength\"].value,10);var myLength=target.value.length;if(myLength>=maxLength){var next=target.nextElementSibling;if(next!=null){if(next.className.includes(\"IP\")){next.focus();}}}else if(myLength==0){var previous=target.previousElementSibling;if(previous!=null){if(previous.className.includes(\"IP\")){previous.focus();}}}}function ipFieldFocus(e){console.log(\"focus\");console.log(e);var target=e.srcElement||e.target;target.select();}function load(){var containers=document.getElementsByClassName(\"IP\");for(var i=0;i<containers.length;i++){var container=containers[i];container.oninput=switchIpField;container.onfocus=ipFieldFocus;}containers=document.getElementsByClassName(\"tIP\");for(var i=0;i<containers.length;i++){var container=containers[i];container.oninput=switchIpField;container.onfocus=ipFieldFocus;}toggleStaticIPFields();}function toggleStaticIPFields(){var enabled=document.getElementById(\"staticIP\").checked;document.getElementById(\"staticIPHidden\").disabled=enabled;var staticIpFields=document.getElementsByClassName('tIP');for(var i=0;i<staticIpFields.length;i++){staticIpFields[i].disabled=!enabled;}}</script><style>a{color:#0F79E0}</style><body style=\"font-family:Verdana;white-space:nowrap;\"onload=\"load()\"><table cellpadding=\"2\"style=\"width:100%\"><tr bgcolor=\"#777777\"style=\"color:#ffffff;font-size:.8em;\"><td colspan=\"3\"><h1>&nbsp;" +
+    html += "<!DOCTYPE html><html><head><meta charset=\"ASCII\"><meta name=\"viewport\"content=\"width=device-width,initial-scale=1.0\"><title>Tally Light setup</title><link rel=\"stylesheet\"href=\"/style.css\"></head><script>function switchIpField(e){console.log(\"switch\");console.log(e);var target=e.srcElement||e.target;var maxLength=parseInt(target.attributes[\"maxlength\"].value,10);var myLength=target.value.length;if(myLength>=maxLength){var next=target.nextElementSibling;if(next!=null){if(next.className.includes(\"IP\")){next.focus();}}}else if(myLength==0){var previous=target.previousElementSibling;if(previous!=null){if(previous.className.includes(\"IP\")){previous.focus();}}}}function ipFieldFocus(e){console.log(\"focus\");console.log(e);var target=e.srcElement||e.target;target.select();}function load(){var containers=document.getElementsByClassName(\"IP\");for(var i=0;i<containers.length;i++){var container=containers[i];container.oninput=switchIpField;container.onfocus=ipFieldFocus;}containers=document.getElementsByClassName(\"tIP\");for(var i=0;i<containers.length;i++){var container=containers[i];container.oninput=switchIpField;container.onfocus=ipFieldFocus;}toggleStaticIPFields();}function toggleStaticIPFields(){var enabled=document.getElementById(\"staticIP\").checked;document.getElementById(\"staticIPHidden\").disabled=enabled;var staticIpFields=document.getElementsByClassName('tIP');for(var i=0;i<staticIpFields.length;i++){staticIpFields[i].disabled=!enabled;}}</script><body onload=\"load()\"><header class=\"top\"><h1>" +
     (String)DISPLAY_NAME +
-    " setup</h1><h2>&nbsp;Status:</h2></td></tr><tr><td><br></td><td></td><td style=\"width:100%;\"></td></tr><tr><td>Connection Status:</td><td colspan=\"2\">";
+    " setup</h1><a class=\"home\"href=\"/tallies\">All tallies on the network &rarr;</a></header><main class=\"cfg\"><section class=\"card\"><h2>Status</h2><table class=\"kv\"><tr><td>Connection Status:</td><td colspan=\"2\">";
     switch (WiFi.status()) {
         case WL_CONNECTED:
             html += "Connected to network";
@@ -920,10 +923,10 @@ void handleRoot() {
     }
     html += "</td></tr><tr><td>Switcher IP:</td><td colspan=\"2\">";
     html += (String)settings.switcherIP[0] + '.' + settings.switcherIP[1] + '.' + settings.switcherIP[2] + '.' + settings.switcherIP[3];
-    html += "</td></tr><tr><td><br></td></tr>";
+    html += "</td></tr>";
 #endif
     sendHtmlChunk(html, true);
-    html += "<tr bgcolor=\"#777777\"style=\"color:#ffffff;font-size:.8em;\"><td colspan=\"3\"><h2>&nbsp;Settings:</h2></td></tr><tr><td><br></td></tr><form action=\"/save\"method=\"post\"><tr><td>Tally Light name: </td><td><input type=\"text\"size=\"30\"maxlength=\"30\"name=\"tName\"value=\"";
+    html += "</table></section><form action=\"/save\"method=\"post\"class=\"stack\"><section class=\"card\"><h2>Tally light</h2><table class=\"kv\"><tr><td>Tally Light name: </td><td><input type=\"text\"size=\"30\"maxlength=\"30\"name=\"tName\"value=\"";
 #ifdef ESP32
     html += WiFi.getHostname();
 #else
@@ -978,7 +981,7 @@ void handleRoot() {
     }
     html += "</select> brightness: <input type=\"number\"size=\"5\"min=\"1\"max=\"255\"name=\"idleBright\"value=\"";
     html += settings.idleBrightness;
-    html += "\"required/></td></tr><tr><td><br></td></tr><tr><td>Amount of Neopixels:</td><td><input type=\"number\"size=\"5\"min=\"0\"max=\"1000\"name=\"neoPxAmount\"value=\"";
+    html += "\"required/></td></tr></table></section><section class=\"card\"><h2>Neopixels</h2><table class=\"kv\"><tr><td>Amount of Neopixels:</td><td><input type=\"number\"size=\"5\"min=\"0\"max=\"1000\"name=\"neoPxAmount\"value=\"";
     html += settings.neopixelsAmount;
     html += "\"required/></td></tr><tr><td>Neopixel status LED: </td><td><select name=\"neoPxStatus\"><option value=\"";
     html += (String) NEOPIXEL_STATUS_FIRST + "\"";
@@ -994,7 +997,7 @@ void handleRoot() {
         html += "selected";
     html += ">None</option></select></td></tr><tr><td> Neopixel brightness: </td><td><input type=\"number\"size=\"5\"min=\"0\"max=\"255\"name=\"neoPxBright\"value=\"";
     html += settings.neopixelBrightness;
-    html +=  "\"required/></td></tr><tr><td><br></td></tr><tr><td>Network name(SSID): </td><td><input type =\"text\"size=\"30\"maxlength=\"30\"name=\"ssid\"value=\"";
+    html +=  "\"required/></td></tr></table></section><section class=\"card\"><h2>Network</h2><table class=\"kv\"><tr><td>Network name (SSID): </td><td><input type =\"text\"size=\"30\"maxlength=\"30\"name=\"ssid\"value=\"";
     html += getSSID();
     html += "\"required/></td></tr><tr><td>Network password: </td><td><input type=\"password\"size=\"30\"maxlength=\"30\"name=\"pwd\"pattern=\"^$|.{8,32}\"value=\"";
     if (WiFi.isConnected()) //As a minimum security meassure, to only send the wifi password if it's currently connected to the given network.
@@ -1033,7 +1036,7 @@ void handleRoot() {
     html += "\"required/></td></tr>";
 #ifndef TALLY_TEST_SERVER
     sendHtmlChunk(html);
-    html += "<tr><td><br></td></tr><tr><td>Switcher type: </td><td><select name=\"swType\"><option value=\"";
+    html += "</table></section><section class=\"card\"><h2>Switcher</h2><table class=\"kv\"><tr><td>Switcher type: </td><td><select name=\"swType\"><option value=\"";
     html += (String) SWITCHER_ATEM + "\"";
     if (settings.switcherType == SWITCHER_ATEM)
         html += "selected";
@@ -1050,7 +1053,7 @@ void handleRoot() {
     html += settings.switcherIP[2];
     html += "\"required/>. <input class=\"IP\"type=\"text\"size=\"3\"maxlength=\"3\"name=\"aIP4\"pattern=\"\\d{0,3}\"value=\"";
     html += settings.switcherIP[3];
-    html += "\"required/></tr>";
+    html += "\"required/></td></tr>";
 
     //RODECaster Video scene to input mapping (picture in picture etc.)
     RcvParser &rcv = rcvSwitcher.state();
@@ -1083,17 +1086,34 @@ void handleRoot() {
     }
     html += "</table></td></tr>";
 #endif
-    html += "<tr><td><br></td></tr><tr><td/><td style=\"float: right;\"><input type=\"submit\"value=\"Save Changes\"/></td></tr></form><tr bgcolor=\"#cccccc\"style=\"font-size: .8em;\"><td colspan=\"3\"><p>&nbsp;&copy; 2020-2022 <a href=\"https://aronhetlam.github.io/\">Aron N. Het Lam</a></p><p>&nbsp;Based on ATEM libraries for Arduino by <a href=\"https://www.skaarhoj.com/\">SKAARHOJ</a></p></td></tr></table></body></html>";
+    html += "</table></section><div class=\"actions\"><input type=\"submit\"value=\"Save changes\"/></div></form><footer><p>&copy; 2020-2022 <a href=\"https://aronhetlam.github.io/\">Aron N. Het Lam</a></p><p>Based on ATEM libraries for Arduino by <a href=\"https://www.skaarhoj.com/\">SKAARHOJ</a></p></footer></main></body></html>";
     sendHtmlChunk(html, true);
     server.sendContent(""); //End of chunked response
+}
+
+//Small page in the style of the settings page, for messages
+String simplePage(const String &message) {
+    return (String)"<!DOCTYPE html><html><head><meta charset=\"ASCII\"><meta name=\"viewport\"content=\"width=device-width,initial-scale=1.0\"><title>" + DISPLAY_NAME + " setup</title><link rel=\"stylesheet\"href=\"/style.css\"></head><body><header class=\"top\"><h1>" + DISPLAY_NAME + " setup</h1><a class=\"home\"href=\"/tallies\">All tallies on the network &rarr;</a></header><main class=\"cfg\"><section class=\"card\"><p>" + message + "</p><a href=\"/\">&larr; Back to settings</a></section></main></body></html>";
+}
+
+//Serve the stylesheet of the settings pages (tools/tally_style.css, embedded gzipped)
+void handleStyle() {
+    server.sendHeader("Content-Encoding", "gzip");
+    server.sendHeader("Cache-Control", "max-age=86400");
+    server.send_P(200, "text/css", reinterpret_cast<PGM_P>(TALLY_STYLE_CSS_GZ), TALLY_STYLE_CSS_GZ_LEN);
+}
+
+//Serve the LAN tally panel (tools/tally_panel.html, embedded gzipped by pio_scripts/embed_panel.py)
+void handleTallies() {
+    server.sendHeader("Content-Encoding", "gzip");
+    server.sendHeader("Cache-Control", "max-age=3600");
+    server.send_P(200, "text/html", reinterpret_cast<PGM_P>(TALLY_PANEL_HTML_GZ), TALLY_PANEL_HTML_GZ_LEN);
 }
 
 //Save new settings from client in EEPROM and restart the ESP8266 module
 void handleSave() {
     if (server.method() != HTTP_POST) {
-        server.send(405, "text/html", "<!DOCTYPE html><html><head><meta charset=\"ASCII\"><meta name=\"viewport\"content=\"width=device-width, initial-scale=1.0\"><title>Tally Light setup</title></head><body style=\"font-family:Verdana;\"><table bgcolor=\"#777777\"border=\"0\"width=\"100%\"cellpadding=\"1\"style=\"color:#ffffff;font-size:.8em;\"><tr><td><h1>&nbsp;" +
-    (String)DISPLAY_NAME +
-    " setup</h1></td></tr></table><br>Request without posting settings not allowed</body></html>");
+        server.send(405, "text/html", simplePage("Request without posting settings not allowed."));
     } else {
         String ssid;
         String pwd;
@@ -1188,9 +1208,7 @@ void handleSave() {
             EEPROM.put(0, settings);
             EEPROM.commit();
 
-            server.send(200, "text/html", (String)"<!DOCTYPE html><html><head><meta charset=\"ASCII\"><meta name=\"viewport\"content=\"width=device-width, initial-scale=1.0\"><title>Tally Light setup</title></head><body><table bgcolor=\"#777777\"border=\"0\"width=\"100%\"cellpadding=\"1\"style=\"font-family:Verdana;color:#ffffff;font-size:.8em;\"><tr><td><h1>&nbsp;" +
-            (String)DISPLAY_NAME +
-            " setup</h1></td></tr></table><br>Settings saved successfully.</body></html>");
+            server.send(200, "text/html", simplePage("Settings saved. The tally light is restarting..."));
 
             // Delay to let data be saved, and the response to be sent properly to the client
             server.close(); // Close server to flush and ensure the response gets to the client
@@ -1216,9 +1234,7 @@ void handleSave() {
 
 //Send 404 to client in case of invalid webpage being requested.
 void handleNotFound() {
-    server.send(404, "text/html", "<!DOCTYPE html><html><head><meta charset=\"ASCII\"><meta name=\"viewport\"content=\"width=device-width, initial-scale=1.0\"><title>" +
-    (String)DISPLAY_NAME +
-    " setup</title></head><body style=\"font-family:Verdana;\"><table bgcolor=\"#777777\"border=\"0\"width=\"100%\"cellpadding=\"1\"style=\"color:#ffffff;font-size:.8em;\"><tr><td><h1>&nbsp Tally Light setup</h1></td></tr></table><br>404 - Page not found</body></html>");
+    server.send(404, "text/html", simplePage("404 - Page not found."));
 }
 
 String getSSID() {
